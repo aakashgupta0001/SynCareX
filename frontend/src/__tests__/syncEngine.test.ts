@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../database/db";
+import {
+  allergyRepository,
+  medicationRepository,
+  observationRepository,
+} from "../repositories/consultationRepository";
 import { patientRepository } from "../repositories/patientRepository";
 import { syncRepository } from "../repositories/syncRepository";
 import { conflictRepository } from "../repositories/conflictRepository";
@@ -26,6 +31,11 @@ class FakeServer {
   readonly patients = new Map<string, Record<string, unknown>>();
   readonly uploads: string[] = [];
   readonly changes: Record<string, unknown>[] = [];
+  readonly receivedOperations: {
+    entity_type: string;
+    operation_type: string;
+    payload: Record<string, unknown>;
+  }[] = [];
   /** Forces a conflict for this entity, as if another device had edited it. */
   conflictFor: string | null = null;
   requestCount = 0;
@@ -68,9 +78,17 @@ class FakeServer {
           idempotency_key: string;
           entity_type: string;
           entity_id: string;
+          operation_type: string;
           payload: Record<string, unknown>;
         }[];
       };
+      this.receivedOperations.push(
+        ...body.operations.map(({ entity_type, operation_type, payload }) => ({
+          entity_type,
+          operation_type,
+          payload,
+        })),
+      );
       const results = body.operations.map((operation) => {
         const stored = this.seenKeys.get(operation.idempotency_key);
         if (stored) {
@@ -264,6 +282,78 @@ describe("E. pull synchronization", () => {
         value: "1",
       });
     });
+});
+
+describe("clinical correction synchronization", () => {
+  it("serializes edit and entered-in-error operations with their base versions", async () => {
+    const patient = await patientRepository.createLocal(syntheticPatient);
+    const observation = await observationRepository.createLocal({
+      patientId: patient.id,
+      code: "temperature",
+      label: "Temperature",
+      value: "37.2",
+      unit: "C",
+    });
+    const allergy = await allergyRepository.createLocal({
+      patientId: patient.id,
+      substance: "Synthetic allergen",
+      reaction: "Rash",
+      severity: "mild",
+    });
+    const medication = await medicationRepository.createLocal({
+      patientId: patient.id,
+      name: "Synthetic medication",
+      dose: "10 mg",
+      frequency: "daily",
+    });
+
+    await observationRepository.updateLocal(observation.id, { value: "37.5" });
+    await allergyRepository.updateLocal(allergy.id, { severity: "moderate" });
+    await medicationRepository.updateLocal(medication.id, { dose: "20 mg" });
+    await observationRepository.archiveLocal(observation.id, "Wrong measurement.");
+    await allergyRepository.archiveLocal(allergy.id, "Wrong patient.");
+    await medicationRepository.archiveLocal(medication.id, "Duplicate entry.");
+
+    const outcome = await syncNow(testUser.id);
+    expect(outcome.failed).toBe(0);
+
+    for (const [entityType, expectedReason] of [
+      ["observation", "Wrong measurement."],
+      ["allergy", "Wrong patient."],
+      ["medication", "Duplicate entry."],
+    ]) {
+      const sent = server.receivedOperations.filter(
+        (operation) => operation.entity_type === entityType,
+      );
+      const update = sent.find((operation) => operation.operation_type === "update");
+      const archive = sent.find((operation) => operation.operation_type === "archive");
+      expect(update?.payload.expected_version).toBe(1);
+      expect(archive?.payload.expected_version).toBe(2);
+      expect(archive?.payload.reason).toBe(expectedReason);
+    }
+
+    expect(
+      server.receivedOperations.find(
+        (operation) =>
+          operation.entity_type === "observation" &&
+          operation.operation_type === "update",
+      )?.payload.value,
+    ).toBe("37.5");
+    expect(
+      server.receivedOperations.find(
+        (operation) =>
+          operation.entity_type === "allergy" &&
+          operation.operation_type === "update",
+      )?.payload.severity,
+    ).toBe("moderate");
+    expect(
+      server.receivedOperations.find(
+        (operation) =>
+          operation.entity_type === "medication" &&
+          operation.operation_type === "update",
+      )?.payload.dose,
+    ).toBe("20 mg");
+  });
 });
 
 describe("D. retry behavior", () => {

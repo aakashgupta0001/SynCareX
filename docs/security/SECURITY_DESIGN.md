@@ -22,7 +22,7 @@ The current implementation is a development foundation, not a production or clin
 - Patient sync does not yet have a general server operation ledger, transactional push/pull checkpoints, or server conflict-resolution history. Consultation and other clinical queues are not synchronized.
 - Conflict responses are retained for review; there is no clinician resolution UI/API and no automatic merge.
 - Audit events are not protected by an append-only database role or cryptographic hash chain.
-- Document upload, malware scanning, OCR, transcription, and extraction are not enabled. Local document bytes are encrypted; upload and file-processing protections remain to be designed.
+- Server-side document upload, malware scanning, OCR, transcription, and extraction are not enabled. The optional loopback AI engine has local OCR adapters; local document bytes are encrypted, but file-processing protections for the server remain to be designed.
 - No production secret manager, refresh-token theft detection, rate limiting, MFA, key rotation/recovery, encrypted backup/restore, retention/deletion workflow, or formal session/device policy is complete.
 - The default development JWT secret and `COOKIE_SECURE=false` are for loopback development only. Production mode rejects those settings, but further deployment hardening is still required.
 

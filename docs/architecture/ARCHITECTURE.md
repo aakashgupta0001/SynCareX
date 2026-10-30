@@ -60,6 +60,11 @@ IndexedDB stores only the metadata required for ownership, relation lookup, vers
 
 The API derives clinic scope from the authenticated user. Frontend navigation or cached role metadata is never an authorization boundary. Patient writes use an expected-version check; stale edits return a conflict instead of silently overwriting the server version.
 
+Observation, allergy, and medication corrections use the same offline versioned
+queue. A clinician can edit an active record or mark it entered in error with
+a required reason; the server checks the base version and retains archived
+records with the actor, timestamp, and reason instead of deleting them.
+
 ## Local AI boundary
 
 `ai_engine` is a separate optional FastAPI process. Its supported runner binds
@@ -71,8 +76,9 @@ installed. Startup does not download weights.
 
 Readiness reports installed runtimes, currently available RAM and model-disk
 space. Inference rechecks model integrity and free RAM. Whisper.cpp handles
-transcription, Tesseract handles image OCR, and `llama-cpp-python` optionally
-extracts schema-validated statements. Extracted evidence must be a verbatim
+transcription, Tesseract handles image OCR, Poppler can render bounded PDFs
+for OCR, and `llama-cpp-python` optionally extracts schema-validated
+statements. Extracted evidence must be a verbatim
 quote from the submitted text; a clinician still reviews each item. Summaries
 are assembled only from facts the clinician selects and preserve their source
 quotes. This engine does not diagnose, prescribe, or automatically modify a
@@ -103,7 +109,7 @@ Workbox precaches the built HTML, JavaScript, CSS, icons, and manifest. Clinical
 
 ## Planned components
 
-PDF OCR, resumable document transfer, model removal, server-side AI provenance,
+Resumable document transfer, model removal, server-side AI provenance,
 automatic AI-artifact synchronization, per-device cursor acknowledgement and
 retention, append-only clinical history, FHIR mapping, and exchange/emergency
 modules remain planned. No AI runtime or model binary is bundled.

@@ -52,7 +52,7 @@ cd frontend && npx playwright test e2e/offline-acceptance.spec.ts
 | 8 | Run local speech transcription | **BLOCKED** | whisper runtime and model absent |
 | 8.1 | AI unavailability stated in the interface | PASS | Explicit "unavailable" state, no crash |
 | 9 | Scan or load a test medical document | PASS | Encrypted locally and queued |
-| 10 | Run local OCR | **BLOCKED** | Tesseract runtime not installed |
+| 10 | Run local OCR | **BLOCKED** | Tesseract not installed; PDF OCR additionally needs Poppler |
 | 11 | Run structured extraction | **BLOCKED** | Local LLM model not downloaded |
 | 12 | Review and edit extracted fields | **BLOCKED** | Depends on step 11 |
 | 13 | Save the consultation | PASS | Edit versioned and queued |

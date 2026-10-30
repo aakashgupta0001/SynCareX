@@ -1,8 +1,9 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import App from "../App";
 import { db } from "../database/db";
+import { allergyRepository } from "../repositories/consultationRepository";
 import { patientRepository } from "../repositories/patientRepository";
 import { syncRepository } from "../repositories/syncRepository";
 import { AuthProvider } from "../services/auth";
@@ -10,6 +11,7 @@ import { lockLocalVault, unlockLocalVault } from "../security/localVault";
 import {
   resetWorkspace,
   setOnline,
+  syntheticPatient,
   testPassword,
   testUser,
 } from "./helpers";
@@ -126,6 +128,60 @@ describe("offline-first workspace", () => {
     ).toBe(true);
   });
 
+  it("edits and marks an allergy entered in error from the patient profile", async () => {
+    await signInOffline();
+    const patient = await patientRepository.createLocal({
+      ...syntheticPatient,
+      fullName: "Clinical Correction Patient",
+    });
+    const allergy = await allergyRepository.createLocal({
+      patientId: patient.id,
+      substance: "Synthetic allergen",
+      reaction: "Rash",
+      severity: "mild",
+    });
+
+    fireEvent.click(screen.getByRole("link", { name: "Patients" }));
+    fireEvent.click(
+      await screen.findByRole("link", { name: `Open ${patient.fullName}` }),
+    );
+    await screen.findByRole("heading", { name: patient.fullName });
+    expect(await screen.findByText("Synthetic allergen")).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Edit allergy Synthetic allergen" }),
+    );
+    fireEvent.change(screen.getByLabelText("Substance"), {
+      target: { value: "Corrected allergen" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(
+      await screen.findByText(/updated on this device and queued/i),
+    ).toBeTruthy();
+
+    const archiveButton = screen.getByRole("button", {
+      name: /mark allergy .* entered in error/i,
+    });
+    await waitFor(() => expect(archiveButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(archiveButton);
+    fireEvent.change(
+      screen.getByLabelText(/Reason for marking entered in error/),
+      { target: { value: "Wrong patient record." } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /confirm entered in error/i }),
+    );
+    expect(
+      await screen.findByText(/marked entered in error, retained/i),
+    ).toBeTruthy();
+
+    const retained = await allergyRepository.listByPatientLocal(patient.id);
+    expect(retained).toHaveLength(1);
+    expect(retained[0].id).toBe(allergy.id);
+    expect(retained[0].substance).toBe("Corrected allergen");
+    expect(retained[0].enteredInErrorReason).toBe("Wrong patient record.");
+  });
+
   it("rejects a registration without an age or date of birth", async () => {
     await signInOffline();
     fireEvent.click(screen.getByRole("link", { name: "Register patient" }));
@@ -173,6 +229,11 @@ describe("offline-first workspace", () => {
     expect(await screen.findByLabelText("Optional text search")).toBeTruthy();
     expect(await screen.findByLabelText("Source text")).toBeTruthy();
     expect(await screen.findByLabelText("Local extraction model")).toBeTruthy();
+    const documentInput = screen.getByLabelText("Choose an image or PDF");
+    const cameraInput = screen.getByLabelText("Or capture a document with your camera");
+    expect(documentInput.getAttribute("accept")).toContain("application/pdf");
+    expect(cameraInput.getAttribute("accept")).toBe("image/*");
+    expect(cameraInput.getAttribute("capture")).toBe("environment");
 
     fireEvent.click(screen.getByRole("link", { name: "Follow-ups" }));
     fireEvent.click(screen.getByRole("button", { name: /schedule follow-up/i }));

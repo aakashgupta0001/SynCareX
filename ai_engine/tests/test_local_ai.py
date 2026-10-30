@@ -121,11 +121,166 @@ def test_upload_validation_does_not_require_installed_runtime(
     response = client.post(
         "/api/v1/ocr",
         headers={"Authorization": "Bearer test-local-token"},
-        files={"document": ("notes.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        files={"document": ("notes.docx", b"synthetic document", "application/octet-stream")},
         data={"language": "eng"},
     )
     assert response.status_code == 422
-    assert "accepts PNG" in response.json()["detail"]
+    assert "accepts PNG, JPEG, TIFF, WebP, or PDF" in response.json()["detail"]
+
+
+def test_pdf_ocr_requires_poppler(settings: Settings) -> None:
+    client = TestClient(create_app(settings))
+    response = client.post(
+        "/api/v1/ocr",
+        headers={"Authorization": f"Bearer {settings.api_token}"},
+        files={"document": ("notes.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        data={"language": "eng"},
+    )
+    assert response.status_code == 503
+    assert "pdftoppm and pdfinfo" in response.json()["detail"]
+
+
+def _mock_tesseract_language_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "ai_engine.app.providers.build_status",
+        lambda _: SimpleNamespace(
+            runtimes={
+                "tesseract": SimpleNamespace(languages=["eng"]),
+            }
+        ),
+    )
+
+
+def test_image_ocr_uses_tesseract_adaptive_thresholding(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.providers import ocr
+
+    _mock_tesseract_language_status(monkeypatch)
+    monkeypatch.setattr(
+        "ai_engine.app.providers._preprocess_image",
+        lambda _source, _destination: None,
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {
+            "tesseract": "tesseract.exe",
+            "pdftoppm": None,
+            "pdfinfo": None,
+        },
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout="Printed text", stderr="")
+
+    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
+
+    result = ocr(settings, "scan.jpg", "eng", b"synthetic image")
+
+    assert result.text == "Printed text"
+    assert commands[0][-2:] == ["-c", "thresholding_method=2"]
+
+
+def test_pdf_ocr_renders_each_page_and_returns_page_markers(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.providers import ocr
+
+    _mock_tesseract_language_status(monkeypatch)
+    monkeypatch.setattr(
+        "ai_engine.app.providers._preprocess_image",
+        lambda _source, _destination: None,
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {
+            "tesseract": "tesseract.exe",
+            "pdftoppm": "pdftoppm.exe",
+            "pdfinfo": "pdfinfo.exe",
+        },
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[0] == "pdfinfo.exe":
+            return SimpleNamespace(stdout="Pages:          2\n", stderr="")
+        if command[0] == "pdftoppm.exe":
+            Path(command[-1] + ".png").write_bytes(b"synthetic png")
+            return SimpleNamespace(stdout="", stderr="")
+        page_name = Path(command[1]).stem
+        return SimpleNamespace(stdout=f"Recognized {page_name}", stderr="")
+
+    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
+
+    result = ocr(settings, "report.pdf", "eng", b"%PDF-1.4 synthetic")
+
+    assert "--- Page 1 ---\nRecognized processed-1" in result.text
+    assert "--- Page 2 ---\nRecognized processed-2" in result.text
+    renders = [command for command in commands if command[0] == "pdftoppm.exe"]
+    assert len(renders) == 2
+    assert all(command[command.index("-scale-to") + 1] == "2500" for command in renders)
+    assert all(command[-3] == "-png" for command in renders)
+
+
+def test_pdf_ocr_rejects_documents_over_page_limit(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.providers import ocr
+
+    _mock_tesseract_language_status(monkeypatch)
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {
+            "tesseract": "tesseract.exe",
+            "pdftoppm": "pdftoppm.exe",
+            "pdfinfo": "pdfinfo.exe",
+        },
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(stdout="Pages:          11\n", stderr="")
+
+    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
+
+    with pytest.raises(ValueError, match="up to 10 pages"):
+        ocr(settings, "long-report.pdf", "eng", b"%PDF-1.4 synthetic")
+    assert len(commands) == 1
+    assert commands[0][0] == "pdfinfo.exe"
+
+
+def test_image_preprocessing_corrects_skew_and_writes_normalized_png(
+    tmp_path: Path,
+) -> None:
+    from PIL import Image, ImageDraw
+
+    from ai_engine.app.providers import _estimate_skew_angle, _preprocess_image
+
+    image = Image.new("L", (900, 280), color=255)
+    draw = ImageDraw.Draw(image)
+    for y in range(45, 240, 32):
+        draw.rectangle((60, y, 820, y + 4), fill=0)
+        for x in range(90, 800, 28):
+            draw.rectangle((x, y - 9, x + 3, y + 9), fill=0)
+    skewed = image.rotate(3, expand=False, fillcolor=255)
+    source = tmp_path / "skewed.png"
+    destination = tmp_path / "processed.png"
+    skewed.save(source)
+
+    estimate = _estimate_skew_angle(skewed)
+    _preprocess_image(source, destination)
+
+    assert estimate == pytest.approx(-3, abs=1)
+    with Image.open(destination) as processed:
+        assert processed.mode == "L"
+        assert processed.size != skewed.size
 
 
 def test_missing_token_configuration_disables_protected_features(

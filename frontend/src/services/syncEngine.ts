@@ -151,6 +151,24 @@ function serializePayload(
     };
   }
   if (operation.entityType === "observation") {
+    if (operation.operationType === "archive") {
+      return {
+        reason: payload.reason,
+        expected_version: operation.baseVersion,
+      };
+    }
+    if (operation.operationType === "update") {
+      return {
+        ...(Object.hasOwn(payload, "code") ? { code: payload.code } : {}),
+        ...(Object.hasOwn(payload, "label") ? { label: payload.label } : {}),
+        ...(Object.hasOwn(payload, "value") ? { value: payload.value } : {}),
+        ...(Object.hasOwn(payload, "unit") ? { unit: payload.unit || null } : {}),
+        ...(Object.hasOwn(payload, "recordedAt")
+          ? { recorded_at: payload.recordedAt }
+          : {}),
+        expected_version: operation.baseVersion,
+      };
+    }
     return {
       patient_id: payload.patientId ?? payload.patient_id,
       consultation_id: payload.consultationId ?? payload.consultation_id ?? null,
@@ -162,6 +180,20 @@ function serializePayload(
     };
   }
   if (operation.entityType === "allergy") {
+    if (operation.operationType === "archive") {
+      return {
+        reason: payload.reason,
+        expected_version: operation.baseVersion,
+      };
+    }
+    if (operation.operationType === "update") {
+      return {
+        ...(Object.hasOwn(payload, "substance") ? { substance: payload.substance } : {}),
+        ...(Object.hasOwn(payload, "reaction") ? { reaction: payload.reaction || null } : {}),
+        ...(Object.hasOwn(payload, "severity") ? { severity: payload.severity } : {}),
+        expected_version: operation.baseVersion,
+      };
+    }
     return {
       patient_id: payload.patientId ?? payload.patient_id,
       substance: payload.substance,
@@ -170,6 +202,28 @@ function serializePayload(
     };
   }
   if (operation.entityType === "medication") {
+    if (operation.operationType === "archive") {
+      return {
+        reason: payload.reason,
+        expected_version: operation.baseVersion,
+      };
+    }
+    if (operation.operationType === "update") {
+      return {
+        ...(Object.hasOwn(payload, "name") ? { name: payload.name } : {}),
+        ...(Object.hasOwn(payload, "dose") ? { dose: payload.dose || null } : {}),
+        ...(Object.hasOwn(payload, "frequency")
+          ? { frequency: payload.frequency || null }
+          : {}),
+        ...(Object.hasOwn(payload, "startedAt")
+          ? { started_at: payload.startedAt || null }
+          : {}),
+        ...(Object.hasOwn(payload, "stoppedAt")
+          ? { stopped_at: payload.stoppedAt || null }
+          : {}),
+        expected_version: operation.baseVersion,
+      };
+    }
     return {
       patient_id: payload.patientId ?? payload.patient_id,
       consultation_id: payload.consultationId ?? payload.consultation_id ?? null,

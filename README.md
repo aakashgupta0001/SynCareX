@@ -13,7 +13,7 @@ SynCareX is a development foundation for offline-first clinical documentation. I
 - **PWA:** Vite PWA/Workbox manifest, service-worker generation and application-shell precaching. The production build precaches local assets and does not rely on a CDN.
 - **User interface:** Login, dashboard, patient directory/create/profile/edit, consultation drafts, documents, optional AI workspace, sync center, conflict review, local integrity guardian, audit history and settings.
 - **Backend API:** Login/refresh/logout/session profile, clinic-scoped patient CRUD/search/pagination, audit listing, health and OpenAPI documentation. Access control is enforced on the API.
-- **Optional AI engine:** A separate loopback-only local service provides device readiness, verified model downloads, speech-to-text, image OCR, evidence-linked structured extraction, clinician review, local history retrieval and editable source-linked summaries. Inference is available only when the corresponding runtime and model are installed; none are bundled or downloaded automatically.
+- **Optional AI engine:** A separate loopback-only local service provides device readiness, verified model downloads, speech-to-text, image/PDF OCR, evidence-linked structured extraction, clinician review, local history retrieval and editable source-linked summaries. OCR supports camera capture, adaptive thresholding, and PDFs up to 10 pages with Poppler. Printed text is best supported; handwriting recognition is experimental. Inference is available only when the corresponding runtime and model are installed; none are bundled or downloaded automatically.
 
 The operation queue is durable across restarts and covers patients, identifiers, consultations, clinical notes, observations, allergies, medications and documents. Push uses durable idempotency and reports per-operation outcomes; a clinic-scoped pull feed applies encrypted pages with a local checkpoint. Concurrent changes are preserved for clinician review rather than automatically merged. Document bytes are checksum-verified but transfer is whole-file, not resumable. Two-device acceptance is now verified in a real browser: two independent persistent profiles converge, and concurrent edits to the same field are preserved for clinician review (8/8 checks, `frontend/e2e/two-device-sync.spec.ts`). PostgreSQL startup and migration are covered by the PostgreSQL 17 CI workflow; this machine's local tests still use SQLite. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), the [offline engine](./docs/offline/OFFLINE_ENGINE.md) and the [synchronization design](./docs/synchronization/SYNC_ENGINE_DESIGN.md) for precise limitations.
 
@@ -130,8 +130,10 @@ are size-limited and SHA-256 verified. Install Whisper.cpp, Tesseract, or the
 optional `llama-cpp-python` runtime separately to enable their capabilities.
 On Windows, `.\ai_engine\setup_local_ai.ps1` installs pinned CPU builds of
 Whisper.cpp and llama.cpp plus Tesseract and FFmpeg; it does not download model
-weights. The transcription flow supports both saved audio and in-browser
-recordings, including Whisper's English translation task. The PWA is responsive
+weights. PDF OCR also needs Poppler (`pdftoppm` and `pdfinfo`), configured with
+`SYNCAREX_PDFTOPPM_BIN` and `SYNCAREX_PDFINFO_BIN`. The transcription flow
+supports both saved audio and in-browser recordings, including Whisper's
+English translation task. The PWA is responsive
 and installable on mobile; its offline database is encrypted IndexedDB rather
 than native SQLite. Check the device readiness panel before any model download
 or inference.
@@ -183,7 +185,7 @@ The frontend unit tests cover offline persistence across restarts, local search 
 - The default development JWT secret and insecure development cookie settings must not be used in deployment. Production configuration requires a strong secret and secure cookies, but that alone does not make deployment production-ready.
 - Local patient content and outbox payloads are encrypted. The local account index/profile metadata is not yet fully concealed from browser storage inspection.
 - IndexedDB is not encrypted by the browser. SynCareX encrypts each record itself; index fields such as record identifiers and timestamps stay readable to anything with access to the browser profile. See the [offline engine threat model](./docs/offline/OFFLINE_ENGINE.md).
-- No device revocation console, resumable document transfer, PDF OCR, FHIR/ABDM integration, tamper-evident audit chain or retention process is implemented. Actual AI inference remains unavailable until its optional runtime and model prerequisites are installed and validated on the target device.
+- No device revocation console, resumable document transfer, FHIR/ABDM integration, tamper-evident audit chain or retention process is implemented. Actual AI inference remains unavailable until its optional runtime and model prerequisites are installed and validated on the target device.
 - Audit history is an operational log, not an immutable or cryptographically verifiable record.
 - No compliance certification is claimed.
 

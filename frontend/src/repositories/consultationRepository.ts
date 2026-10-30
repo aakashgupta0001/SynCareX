@@ -245,6 +245,9 @@ export const observationRepository = {
       value: input.value,
       unit: input.unit ?? "",
       recordedAt: input.recordedAt ?? now,
+      enteredInErrorAt: null,
+      enteredInErrorBy: null,
+      enteredInErrorReason: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -278,6 +281,81 @@ export const observationRepository = {
       "read observations",
     );
   },
+
+  async updateLocal(
+    id: string,
+    changes: Partial<Pick<LocalObservation, "code" | "label" | "value" | "unit" | "recordedAt">>,
+  ): Promise<LocalObservation> {
+    const identity = requireUnlockedIdentity("edit observations");
+    const current = await getOwned<LocalObservation>(db.observations, id, "edit observations");
+    if (!current) throw new Error("Observation was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("An entered-in-error observation cannot be edited.");
+    if (!Object.keys(changes).length) throw new Error("Enter at least one observation change.");
+    const updated: LocalObservation = {
+      ...current,
+      ...changes,
+      version: current.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "observation",
+      operationType: "update",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: changes,
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.observations, plan);
+    await auditRepository.record({
+      action: "observation.update.local",
+      entityType: "observation",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
+  },
+
+  async archiveLocal(id: string, reason: string): Promise<LocalObservation> {
+    const identity = requireUnlockedIdentity("mark observations entered in error");
+    const current = await getOwned<LocalObservation>(db.observations, id, "archive observations");
+    if (!current) throw new Error("Observation was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("Observation is already entered in error.");
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 3 || cleanReason.length > 500) {
+      throw new Error("Enter an entered-in-error reason between 3 and 500 characters.");
+    }
+    const now = new Date().toISOString();
+    const updated: LocalObservation = {
+      ...current,
+      enteredInErrorAt: now,
+      enteredInErrorBy: identity.userId,
+      enteredInErrorReason: cleanReason,
+      version: current.version + 1,
+      updatedAt: now,
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "observation",
+      operationType: "archive",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: { reason: cleanReason, expected_version: current.version },
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.observations, plan);
+    await auditRepository.record({
+      action: "observation.archive.local",
+      entityType: "observation",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
+  },
 };
 
 export interface AllergyInput {
@@ -298,6 +376,9 @@ export const allergyRepository = {
       reaction: input.reaction ?? "",
       severity: input.severity ?? "unknown",
       recordedAt: now,
+      enteredInErrorAt: null,
+      enteredInErrorBy: null,
+      enteredInErrorReason: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -326,6 +407,81 @@ export const allergyRepository = {
       patientId,
       "read allergies",
     );
+  },
+
+  async updateLocal(
+    id: string,
+    changes: Partial<Pick<LocalAllergy, "substance" | "reaction" | "severity">>,
+  ): Promise<LocalAllergy> {
+    const identity = requireUnlockedIdentity("edit allergies");
+    const current = await getOwned<LocalAllergy>(db.allergies, id, "edit allergies");
+    if (!current) throw new Error("Allergy was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("An entered-in-error allergy cannot be edited.");
+    if (!Object.keys(changes).length) throw new Error("Enter at least one allergy change.");
+    const updated: LocalAllergy = {
+      ...current,
+      ...changes,
+      version: current.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "allergy",
+      operationType: "update",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: changes,
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.allergies, plan);
+    await auditRepository.record({
+      action: "allergy.update.local",
+      entityType: "allergy",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
+  },
+
+  async archiveLocal(id: string, reason: string): Promise<LocalAllergy> {
+    const identity = requireUnlockedIdentity("mark allergies entered in error");
+    const current = await getOwned<LocalAllergy>(db.allergies, id, "archive allergies");
+    if (!current) throw new Error("Allergy was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("Allergy is already entered in error.");
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 3 || cleanReason.length > 500) {
+      throw new Error("Enter an entered-in-error reason between 3 and 500 characters.");
+    }
+    const now = new Date().toISOString();
+    const updated: LocalAllergy = {
+      ...current,
+      enteredInErrorAt: now,
+      enteredInErrorBy: identity.userId,
+      enteredInErrorReason: cleanReason,
+      version: current.version + 1,
+      updatedAt: now,
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "allergy",
+      operationType: "archive",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: { reason: cleanReason, expected_version: current.version },
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.allergies, plan);
+    await auditRepository.record({
+      action: "allergy.archive.local",
+      entityType: "allergy",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
   },
 };
 
@@ -356,6 +512,9 @@ export const medicationRepository = {
       startedAt: input.startedAt ?? null,
       stoppedAt: null,
       recordedBy: identity.userId,
+      enteredInErrorAt: null,
+      enteredInErrorBy: null,
+      enteredInErrorReason: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -387,5 +546,80 @@ export const medicationRepository = {
       patientId,
       "read medications",
     );
+  },
+
+  async updateLocal(
+    id: string,
+    changes: Partial<Pick<LocalMedication, "name" | "dose" | "frequency" | "startedAt" | "stoppedAt">>,
+  ): Promise<LocalMedication> {
+    const identity = requireUnlockedIdentity("edit medications");
+    const current = await getOwned<LocalMedication>(db.medications, id, "edit medications");
+    if (!current) throw new Error("Medication was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("An entered-in-error medication cannot be edited.");
+    if (!Object.keys(changes).length) throw new Error("Enter at least one medication change.");
+    const updated: LocalMedication = {
+      ...current,
+      ...changes,
+      version: current.version + 1,
+      updatedAt: new Date().toISOString(),
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "medication",
+      operationType: "update",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: changes,
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.medications, plan);
+    await auditRepository.record({
+      action: "medication.update.local",
+      entityType: "medication",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
+  },
+
+  async archiveLocal(id: string, reason: string): Promise<LocalMedication> {
+    const identity = requireUnlockedIdentity("mark medications entered in error");
+    const current = await getOwned<LocalMedication>(db.medications, id, "archive medications");
+    if (!current) throw new Error("Medication was not found on this device.");
+    if (current.enteredInErrorAt) throw new Error("Medication is already entered in error.");
+    const cleanReason = reason.trim();
+    if (cleanReason.length < 3 || cleanReason.length > 500) {
+      throw new Error("Enter an entered-in-error reason between 3 and 500 characters.");
+    }
+    const now = new Date().toISOString();
+    const updated: LocalMedication = {
+      ...current,
+      enteredInErrorAt: now,
+      enteredInErrorBy: identity.userId,
+      enteredInErrorReason: cleanReason,
+      version: current.version + 1,
+      updatedAt: now,
+    };
+    const plan = await planWrite({
+      entity: updated,
+      entityType: "medication",
+      operationType: "archive",
+      baseVersion: current.version,
+      baseSnapshot: current,
+      payload: { reason: cleanReason, expected_version: current.version },
+      meta: { patientId: updated.patientId },
+      identity,
+    });
+    plan.record.createdAt = current.createdAt;
+    const saved = await commitWrite(db.medications, plan);
+    await auditRepository.record({
+      action: "medication.archive.local",
+      entityType: "medication",
+      entityId: saved.id,
+      details: { version: saved.version },
+    });
+    return saved;
   },
 };

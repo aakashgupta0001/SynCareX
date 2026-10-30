@@ -315,6 +315,11 @@ class Observation(Base):
     recorded_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    entered_in_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    entered_in_error_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    entered_in_error_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -339,6 +344,11 @@ class AllergyRecord(Base):
     recorded_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    entered_in_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    entered_in_error_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    entered_in_error_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -372,6 +382,11 @@ class MedicationRecord(Base):
     recorded_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+    entered_in_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    entered_in_error_by: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    entered_in_error_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
@@ -749,7 +764,13 @@ def append_clinical_change_feed(session: OrmSession, _flush_context) -> None:
                 entity_type=entity_type,
                 entity_id=entity.id,
                 operation_type="archive"
-                if isinstance(entity, Patient) and entity.archived_at is not None
+                if (
+                    isinstance(entity, Patient) and entity.archived_at is not None
+                )
+                or (
+                    isinstance(entity, (Observation, AllergyRecord, MedicationRecord))
+                    and entity.entered_in_error_at is not None
+                )
                 else "update",
                 entity_version=version,
                 payload=snapshot,

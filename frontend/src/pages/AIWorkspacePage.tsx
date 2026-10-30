@@ -35,7 +35,15 @@ import type { LocalPatient } from "../database/types";
 import { localAIClient, type ExtractedFact, type LocalAIModel, type LocalAIStatus } from "../services/localAI";
 
 const AUDIO_TYPES = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/webm", "audio/flac"];
-const IMAGE_TYPES = ["image/png", "image/jpeg", "image/tiff", "image/webp"];
+const DOCUMENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/tiff",
+  "image/webp",
+  "application/pdf",
+  ".pdf",
+];
+const CAMERA_IMAGE_TYPES = ["image/*"];
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KiB`;
@@ -60,7 +68,7 @@ export function AIWorkspacePage() {
   const [selectedArtifact, setSelectedArtifact] = useState<DecryptedAIArtifact | null>(null);
   const [token, setToken] = useState("");
   const [audio, setAudio] = useState<File | null>(null);
-  const [image, setImage] = useState<File | null>(null);
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
   const [transcriptionModel, setTranscriptionModel] = useState("whisper-tiny");
   const [extractionModel, setExtractionModel] = useState("qwen-0.5b-q4");
   const [language, setLanguage] = useState<"auto" | "en" | "hi">("auto");
@@ -238,15 +246,15 @@ export function AIWorkspacePage() {
         ]);
         const sourceLines = [
           patient.relevantHistory && `Recorded history: ${patient.relevantHistory}`,
-          ...allergies.map(
+          ...allergies.filter((item) => !item.enteredInErrorAt).map(
             (item) =>
               `Recorded allergy: ${item.substance}; reaction: ${item.reaction}; severity: ${item.severity}`,
           ),
-          ...medications.map(
+          ...medications.filter((item) => !item.enteredInErrorAt).map(
             (item) =>
               `Recorded medication: ${item.name}; dose: ${item.dose}; frequency: ${item.frequency}`,
           ),
-          ...observations.map(
+          ...observations.filter((item) => !item.enteredInErrorAt).map(
             (item) => `Recorded observation (${item.recordedAt}): ${item.label} ${item.value} ${item.unit}`,
           ),
           ...notes.map((item) => `Clinical note (${item.noteType}): ${item.body}`),
@@ -336,13 +344,13 @@ export function AIWorkspacePage() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!image) {
-      setError("Choose an image file first.");
+    if (!documentFile) {
+      setError("Choose or capture an image or PDF first.");
       return;
     }
     setBusy("ocr");
     try {
-      const source = await aiRepository.saveSource("document_source", image);
+      const source = await aiRepository.saveSource("document_source", documentFile);
       const localSource = await aiRepository.openSource(source.id);
       if (!localSource) throw new Error("The encrypted document copy could not be reopened.");
       const savedFile = new File([localSource.blob], localSource.fileName, {
@@ -356,7 +364,7 @@ export function AIWorkspacePage() {
       });
       setSelectedArtifact(ocrArtifact);
       setSourceText(result.text);
-      setMessage("Image text was read locally; the original and OCR result are encrypted on this device.");
+      setMessage("Document text was read locally; the original and OCR result are encrypted on this device.");
       await reload();
     } catch (reason) {
       const detail = reason instanceof Error ? reason.message : "OCR failed.";
@@ -708,15 +716,27 @@ export function AIWorkspacePage() {
           <div className="section-heading">
             <div>
               <h2><FileImage size={17} /> Document OCR</h2>
-              <p>Image OCR uses the languages available in the local Tesseract installation. PDF OCR is not yet supported.</p>
+              <p>
+                Printed text is best supported. Handwriting recognition is experimental and may be inaccurate;
+                verify every result against the original. PDFs are limited to 10 pages and need Poppler.
+              </p>
             </div>
           </div>
           <form className="ai-form" onSubmit={(event) => void submitOCR(event)}>
             <label className="form-field">
-              <span>Image document</span>
+              <span>Choose an image or PDF</span>
               <input
-                accept={IMAGE_TYPES.join(",")}
-                onChange={(event) => setImage(event.target.files?.[0] ?? null)}
+                accept={DOCUMENT_TYPES.join(",")}
+                onChange={(event) => setDocumentFile(event.target.files?.[0] ?? null)}
+                type="file"
+              />
+            </label>
+            <label className="form-field">
+              <span>Or capture a document with your camera</span>
+              <input
+                accept={CAMERA_IMAGE_TYPES.join(",")}
+                capture="environment"
+                onChange={(event) => setDocumentFile(event.target.files?.[0] ?? null)}
                 type="file"
               />
             </label>

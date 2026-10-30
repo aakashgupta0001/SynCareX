@@ -24,13 +24,20 @@ allowed by default. For another trusted frontend origin, set
 
 The service also supports `SYNCAREX_AI_MODEL_DIR`,
 `SYNCAREX_WHISPER_BIN`, `SYNCAREX_TESSERACT_BIN`, `SYNCAREX_FFMPEG_BIN`,
-and `SYNCAREX_LLAMA_BIN`. On Windows, `.\ai_engine\setup_local_ai.ps1`
+`SYNCAREX_LLAMA_BIN`, `SYNCAREX_PDFTOPPM_BIN`, and `SYNCAREX_PDFINFO_BIN`.
+On Windows, `.\ai_engine\setup_local_ai.ps1`
 installs pinned, SHA-256-verified CPU builds of whisper.cpp and llama.cpp and
 uses winget to install Tesseract OCR and FFmpeg. The runtime installer does
 not download models; choose each model explicitly in the AI workspace. The
 model directory
 defaults to `%USERPROFILE%\.syncarex\models`. Never expose this loopback service
 through a LAN interface or reverse proxy.
+
+For PDF OCR, install Poppler for Windows and either add its `Library\bin`
+directory to `PATH` or set the two Poppler variables to the full paths of
+`pdftoppm.exe` and `pdfinfo.exe`. The default runner checks
+`%USERPROFILE%\.syncarex\bin\poppler\Library\bin` automatically. The readiness
+card reports whether the PDF tools are available.
 
 ## Runtimes and models
 
@@ -48,8 +55,12 @@ No model binary is committed or included in the PWA.
   OGG and FLAC are read directly.
   Mixed Hindi-English (Hinglish) uses automatic language detection and has not
   been accuracy-validated.
-- OCR requires Tesseract OCR and the relevant `.traineddata` language files.
-  The current interface supports image files, not PDF conversion.
+- OCR accepts PNG, JPEG, TIFF, WebP, camera captures, and PDFs up to 10 pages.
+  PDF pages are rendered one at a time by Poppler at a bounded image size.
+  Tesseract 5 uses adaptive Sauvola thresholding; printed text is best supported.
+  Handwriting recognition is experimental, may be inaccurate, and must be
+  checked against the original. OCR requires Tesseract and the relevant
+  `.traineddata` language files; PDF OCR additionally requires Poppler.
 - Structured extraction uses the pinned CPU `llama-cli` executable on Windows.
   Configure `SYNCAREX_LLAMA_BIN` when it is not in the setup script's default
   location. The existing optional `llama-cpp-python` adapter remains supported
@@ -72,8 +83,9 @@ artifacts, evidence-linked review, and runtime adapters are implemented.
 Windows setup installs CPU runtimes but does not automatically download models;
 use the AI workspace's explicit download actions. Verify the readiness panel
 before inference. This is an experimental documentation aid, not a medical
-device; use synthetic data only. PDF OCR, model-download resume, model deletion,
-and automatic artifact synchronization are not implemented.
+device; use synthetic data only. Handwriting recognition is not validated.
+Model-download resume, model deletion, and automatic artifact synchronization
+are not implemented.
 
 Run engine tests from the repository root:
 

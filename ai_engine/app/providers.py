@@ -7,10 +7,12 @@ import subprocess
 import tempfile
 from threading import Lock
 
+from PIL import Image, ImageOps
+
 from .catalog import MODEL_BY_ID
 from .config import Settings
 from .model_manager import verify_model
-from .models import EngineStatus, ExtractionResult, OCRResult, TranscriptionResult
+from .models import ExtractionResult, OCRResult, TranscriptionResult
 from .readiness import build_status, model_status, runtime_paths
 
 
@@ -18,6 +20,11 @@ _INFERENCE_LOCK = Lock()
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac"}
 _WHISPER_AUDIO_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
+_MAX_PDF_PAGES = 10
+_PDF_RENDER_MAX_EDGE = 2500
+_MAX_IMAGE_PIXELS = 50_000_000
+_MAX_IMAGE_EDGE = 3500
+_MAX_DESKEW_ANGLE = 5
 
 
 class ProviderUnavailable(Exception):
@@ -178,11 +185,17 @@ def ocr(
     if len(content) > settings.max_upload_bytes:
         raise ValueError("Document exceeds the 25 MiB local processing limit.")
     suffix = Path(file_name).suffix.lower()
-    if suffix not in _IMAGE_SUFFIXES:
-        raise ValueError("OCR currently accepts PNG, JPEG, TIFF, or WebP images.")
+    if suffix not in _IMAGE_SUFFIXES and suffix != ".pdf":
+        raise ValueError("OCR accepts PNG, JPEG, TIFF, WebP, or PDF documents.")
     if not re.fullmatch(r"[a-z]{3}(?:\+[a-z]{3}){0,3}", language):
         raise ValueError("Use installed three-letter Tesseract language codes.")
-    binary = runtime_paths(settings)["tesseract"]
+    runtimes = runtime_paths(settings)
+    if suffix == ".pdf" and not (runtimes["pdftoppm"] and runtimes["pdfinfo"]):
+        raise ProviderUnavailable(
+            "PDF OCR needs Poppler's pdftoppm and pdfinfo executables. "
+            "Install Poppler or configure SYNCAREX_PDFTOPPM_BIN and SYNCAREX_PDFINFO_BIN."
+        )
+    binary = runtimes["tesseract"]
     if not binary:
         raise ProviderUnavailable("Install Tesseract OCR and configure SYNCAREX_TESSERACT_BIN.")
     available = set(build_status(settings).runtimes["tesseract"].languages)
@@ -194,24 +207,192 @@ def ocr(
     with tempfile.TemporaryDirectory(prefix="syncarex-ocr-") as directory:
         source = Path(directory) / f"source{suffix}"
         source.write_bytes(content)
-        try:
-            with _INFERENCE_LOCK:
-                result = subprocess.run(
-                    [binary, str(source), "stdout", "-l", language, "--psm", "3"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                    check=True,
+        if suffix == ".pdf":
+            page_count = _pdf_page_count(runtimes["pdfinfo"], source)
+            if page_count > _MAX_PDF_PAGES:
+                raise ValueError(
+                    f"PDF contains {page_count} pages; OCR supports up to {_MAX_PDF_PAGES} pages per file."
                 )
-        except subprocess.TimeoutExpired as error:
-            raise ProviderUnavailable("OCR exceeded the two-minute limit.") from error
-        except subprocess.CalledProcessError as error:
-            details = (error.stderr or "Tesseract failed").strip()[-1000:]
-            raise ProviderUnavailable(f"OCR failed: {details}") from error
-    text = result.stdout.strip()
+            pages: list[str] = []
+            for page_number in range(1, page_count + 1):
+                rendered = _render_pdf_page(
+                    runtimes["pdftoppm"], source, Path(directory), page_number
+                )
+                processed = Path(directory) / f"processed-{page_number}.png"
+                _preprocess_image(rendered, processed)
+                page_text = _run_tesseract(binary, processed, language)
+                pages.append(f"--- Page {page_number} ---\n{page_text}")
+            text = "\n\n".join(pages).strip()
+        else:
+            processed = Path(directory) / "processed.png"
+            _preprocess_image(source, processed)
+            text = _run_tesseract(binary, processed, language)
     if not text:
-        raise ProviderUnavailable("No text was recognized in the selected image.")
+        raise ProviderUnavailable("No text was recognized in the selected document.")
     return OCRResult(text=text, language=language)
+
+
+def _pdf_page_count(pdfinfo: str | None, source: Path) -> int:
+    if not pdfinfo:
+        raise ProviderUnavailable("The Poppler pdfinfo executable is not available.")
+    try:
+        with _INFERENCE_LOCK:
+            result = subprocess.run(
+                [pdfinfo, str(source)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=True,
+            )
+    except subprocess.TimeoutExpired as error:
+        raise ProviderUnavailable("Reading PDF metadata exceeded the 15-second limit.") from error
+    except subprocess.CalledProcessError as error:
+        raise ValueError("Could not read this PDF. Use a valid, unencrypted PDF document.") from error
+    except OSError as error:
+        raise ProviderUnavailable("The configured Poppler pdfinfo executable could not start.") from error
+
+    match = re.search(r"^Pages:\s*(\d+)\s*$", result.stdout, re.MULTILINE)
+    if not match:
+        raise ProviderUnavailable("Poppler did not report the PDF page count.")
+    page_count = int(match.group(1))
+    if page_count < 1:
+        raise ValueError("The PDF does not contain any pages.")
+    return page_count
+
+
+def _preprocess_image(source: Path, destination: Path) -> None:
+    try:
+        with Image.open(source) as opened:
+            if opened.width * opened.height > _MAX_IMAGE_PIXELS:
+                raise ValueError(
+                    f"Image exceeds the {_MAX_IMAGE_PIXELS // 1_000_000}-megapixel OCR limit."
+                )
+            image = ImageOps.exif_transpose(opened).convert("L")
+    except (Image.DecompressionBombError, OSError) as error:
+        raise ValueError("Could not read the selected image. Use a valid PNG, JPEG, TIFF, or WebP.") from error
+
+    image = ImageOps.autocontrast(image)
+    image.thumbnail((_MAX_IMAGE_EDGE, _MAX_IMAGE_EDGE), Image.Resampling.LANCZOS)
+    angle = _estimate_skew_angle(image)
+    if angle:
+        image = image.rotate(
+            angle,
+            resample=Image.Resampling.BICUBIC,
+            expand=True,
+            fillcolor=255,
+        )
+    ImageOps.autocontrast(image).save(destination, format="PNG")
+
+
+def _estimate_skew_angle(image: Image.Image) -> float:
+    probe = image.copy()
+    probe.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    binary = probe.point(lambda value: 255 if value < 160 else 0)
+    best_angle = 0.0
+    best_score = _horizontal_projection_score(binary)
+    zero_score = best_score
+
+    for half_degrees in range(-_MAX_DESKEW_ANGLE * 2, _MAX_DESKEW_ANGLE * 2 + 1):
+        angle = half_degrees / 2
+        if angle == 0:
+            continue
+        rotated = binary.rotate(angle, resample=Image.Resampling.NEAREST, fillcolor=0)
+        score = _horizontal_projection_score(rotated)
+        if score > best_score:
+            best_angle = angle
+            best_score = score
+
+    if best_score <= zero_score * 1.02:
+        return 0.0
+    return best_angle
+
+
+def _horizontal_projection_score(image: Image.Image) -> float:
+    width, height = image.size
+    pixels = image.tobytes()
+    projection = [
+        pixels[row * width : (row + 1) * width].count(255)
+        for row in range(height)
+    ]
+    if not projection:
+        return 0.0
+    mean = sum(projection) / len(projection)
+    return sum((value - mean) ** 2 for value in projection) / len(projection)
+
+
+def _render_pdf_page(
+    pdftoppm: str | None,
+    source: Path,
+    directory: Path,
+    page_number: int,
+) -> Path:
+    if not pdftoppm:
+        raise ProviderUnavailable("The Poppler pdftoppm executable is not available.")
+    output_prefix = directory / f"page-{page_number}"
+    try:
+        with _INFERENCE_LOCK:
+            subprocess.run(
+                [
+                    pdftoppm,
+                    "-f",
+                    str(page_number),
+                    "-l",
+                    str(page_number),
+                    "-singlefile",
+                    "-scale-to",
+                    str(_PDF_RENDER_MAX_EDGE),
+                    "-png",
+                    str(source),
+                    str(output_prefix),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
+            )
+    except subprocess.TimeoutExpired as error:
+        raise ProviderUnavailable(
+            f"Rendering PDF page {page_number} exceeded the one-minute limit."
+        ) from error
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or "pdftoppm could not render the PDF page").strip()[-1000:]
+        raise ProviderUnavailable(f"PDF page rendering failed: {details}") from error
+    except OSError as error:
+        raise ProviderUnavailable("The configured Poppler pdftoppm executable could not start.") from error
+    rendered = output_prefix.with_suffix(".png")
+    if not rendered.is_file() or rendered.stat().st_size == 0:
+        raise ProviderUnavailable(f"Poppler did not produce image data for PDF page {page_number}.")
+    return rendered
+
+
+def _run_tesseract(binary: str, source: Path, language: str) -> str:
+    try:
+        with _INFERENCE_LOCK:
+            result = subprocess.run(
+                [
+                    binary,
+                    str(source),
+                    "stdout",
+                    "-l",
+                    language,
+                    "--psm",
+                    "3",
+                    "-c",
+                    "thresholding_method=2",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=True,
+            )
+    except subprocess.TimeoutExpired as error:
+        raise ProviderUnavailable("OCR exceeded the two-minute limit.") from error
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or "Tesseract failed").strip()[-1000:]
+        raise ProviderUnavailable(f"OCR failed: {details}") from error
+    except OSError as error:
+        raise ProviderUnavailable("The configured Tesseract executable could not start.") from error
+    return result.stdout.strip()
 
 
 def extract_facts(settings: Settings, model_id: str, text: str) -> ExtractionResult:
