@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "../database/db";
 import { aiRepository } from "../repositories/aiRepository";
 import {
+  allergyRepository,
   clinicalNoteRepository,
   consultationRepository,
+  medicationRepository,
+  observationRepository,
 } from "../repositories/consultationRepository";
 import { documentRepository } from "../repositories/documentRepository";
 import {
@@ -158,6 +161,70 @@ describe("B. offline consultation, notes and documents", () => {
     const blob = await documentRepository.openLocal(document.id);
     expect(blob).not.toBeNull();
     expect(await blob!.text()).toContain("synthetic test document");
+  });
+
+  it("edits and marks clinical records entered in error without deleting them", async () => {
+    const patient = await patientRepository.createLocal(syntheticPatient);
+    const observation = await observationRepository.createLocal({
+      patientId: patient.id,
+      code: "temperature",
+      label: "Temperature",
+      value: "37.2",
+      unit: "C",
+    });
+    const allergy = await allergyRepository.createLocal({
+      patientId: patient.id,
+      substance: "Synthetic allergen",
+      reaction: "Rash",
+      severity: "mild",
+    });
+    const medication = await medicationRepository.createLocal({
+      patientId: patient.id,
+      name: "Synthetic medication",
+      dose: "10 mg",
+      frequency: "daily",
+    });
+
+    await observationRepository.updateLocal(observation.id, { value: "37.5" });
+    await allergyRepository.updateLocal(allergy.id, { severity: "moderate" });
+    await medicationRepository.updateLocal(medication.id, { dose: "20 mg" });
+    await observationRepository.archiveLocal(observation.id, "Wrong measurement.");
+    await allergyRepository.archiveLocal(allergy.id, "Entered on wrong patient.");
+    await medicationRepository.archiveLocal(medication.id, "Duplicate entry.");
+
+    await restartBrowser();
+
+    const observations = await observationRepository.listByPatientLocal(patient.id);
+    const allergies = await allergyRepository.listByPatientLocal(patient.id);
+    const medications = await medicationRepository.listByPatientLocal(patient.id);
+    expect(observations).toHaveLength(1);
+    expect(observations[0].value).toBe("37.5");
+    expect(observations[0].enteredInErrorReason).toBe("Wrong measurement.");
+    expect(observations[0].version).toBe(3);
+    expect(allergies[0].severity).toBe("moderate");
+    expect(allergies[0].enteredInErrorAt).toBeTruthy();
+    expect(medications[0].dose).toBe("20 mg");
+    expect(medications[0].enteredInErrorReason).toBe("Duplicate entry.");
+
+    const operations = await syncRepository.getPending(testUser.id);
+    for (const entity of [observation, allergy, medication]) {
+      expect(
+        operations.some(
+          (item) =>
+            item.entityId === entity.id &&
+            item.operationType === "update" &&
+            item.baseVersion === 1,
+        ),
+      ).toBe(true);
+      expect(
+        operations.some(
+          (item) =>
+            item.entityId === entity.id &&
+            item.operationType === "archive" &&
+            item.baseVersion === 2,
+        ),
+      ).toBe(true);
+    }
   });
 
   it("validates document size and format before storing anything", async () => {

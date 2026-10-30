@@ -225,6 +225,164 @@ def test_concurrent_edit_is_reported_as_a_conflict_without_overwriting(api_clien
     assert current["version"] == 2
 
 
+def test_clinical_records_can_be_corrected_and_entered_in_error_with_version_checks(
+    api_client,
+) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    patient_result = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"clinical-patient:{patient_id}"),
+                payload=patient_payload(),
+            )
+        ],
+    )
+    assert patient_result.status_code == 200
+    assert patient_result.json()["results"][0]["status"] == "acknowledged"
+
+    records = [
+        (
+            "observation",
+            str(uuid4()),
+            {
+                "patient_id": patient_id,
+                "code": "bp",
+                "label": "Blood pressure",
+                "value": "120/80",
+                "unit": "mmHg",
+            },
+            {"value": "118/78"},
+        ),
+        (
+            "allergy",
+            str(uuid4()),
+            {
+                "patient_id": patient_id,
+                "substance": "Penicillin",
+                "reaction": "Rash",
+                "severity": "moderate",
+            },
+            {"reaction": "Hives", "severity": "severe"},
+        ),
+        (
+            "medication",
+            str(uuid4()),
+            {
+                "patient_id": patient_id,
+                "name": "Synthetic medication",
+                "dose": "10 mg",
+                "frequency": "daily",
+            },
+            {"dose": "20 mg"},
+        ),
+    ]
+
+    for entity_type, entity_id, create_payload, changes in records:
+        created = send(
+            client,
+            headers,
+            [
+                operation(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    idempotency_key=key(f"{entity_type}-create:{entity_id}"),
+                    payload=create_payload,
+                )
+            ],
+        )
+        assert created.status_code == 200, created.text
+        assert created.json()["results"][0]["status"] == "acknowledged"
+
+        updated = send(
+            client,
+            headers,
+            [
+                operation(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    operation_type="update",
+                    base_version=1,
+                    local_version=2,
+                    idempotency_key=key(f"{entity_type}-update:{entity_id}"),
+                    payload={**changes, "expected_version": 1},
+                )
+            ],
+        )
+        assert updated.status_code == 200, updated.text
+        update_result = updated.json()["results"][0]
+        assert update_result["status"] == "acknowledged"
+        assert update_result["server_version"] == 2
+
+        stale = send(
+            client,
+            headers,
+            [
+                operation(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    operation_type="update",
+                    base_version=1,
+                    local_version=3,
+                    idempotency_key=key(f"{entity_type}-stale:{entity_id}"),
+                    payload={**changes, "expected_version": 1},
+                )
+            ],
+        )
+        assert stale.status_code == 200
+        stale_result = stale.json()["results"][0]
+        assert stale_result["status"] == "conflict"
+        assert stale_result["server_version"] == 2
+
+        archived = send(
+            client,
+            headers,
+            [
+                operation(
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    operation_type="archive",
+                    base_version=2,
+                    local_version=3,
+                    idempotency_key=key(f"{entity_type}-archive:{entity_id}"),
+                    payload={
+                        "reason": "Entered on the wrong patient.",
+                        "expected_version": 2,
+                    },
+                )
+            ],
+        )
+        assert archived.status_code == 200, archived.text
+        archive_result = archived.json()["results"][0]
+        assert archive_result["status"] == "acknowledged"
+        assert archive_result["server_version"] == 3
+        assert archive_result["entity"]["entered_in_error_at"]
+        assert archive_result["entity"]["entered_in_error_reason"] == (
+            "Entered on the wrong patient."
+        )
+
+    changes_response = client.get(
+        "/api/v1/sync/changes",
+        params={"device_id": DEVICE_ID, "cursor": 0, "limit": 100},
+        headers=headers,
+    )
+    assert changes_response.status_code == 200, changes_response.text
+    archived_changes = [
+        change
+        for change in changes_response.json()["changes"]
+        if change["operation_type"] == "archive"
+        and change["entity_type"] in {"observation", "allergy", "medication"}
+    ]
+    assert len(archived_changes) == 3
+    assert all(not change["tombstone"] for change in archived_changes)
+
+
 def test_batch_is_partially_applied_and_out_of_order_records_stay_retryable(
     api_client,
 ) -> None:
@@ -437,7 +595,7 @@ def test_unsupported_operation_is_rejected_without_retry(api_client) -> None:
         [
             operation(
                 entity_type="allergy",
-                operation_type="archive",
+                operation_type="upload",
                 payload={"patient_id": str(uuid4())},
             )
         ],

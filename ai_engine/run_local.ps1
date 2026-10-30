@@ -22,6 +22,8 @@ $runtimeDefaults = @{
   SYNCAREX_WHISPER_BIN = Join-Path $runtimeRoot "whisper\Release\whisper-cli.exe"
   SYNCAREX_LLAMA_BIN = Join-Path $runtimeRoot "llama\llama-cli.exe"
   SYNCAREX_TESSERACT_BIN = Join-Path $env:ProgramFiles "Tesseract-OCR\tesseract.exe"
+  SYNCAREX_PDFTOPPM_BIN = Join-Path $runtimeRoot "poppler\Library\bin\pdftoppm.exe"
+  SYNCAREX_PDFINFO_BIN = Join-Path $runtimeRoot "poppler\Library\bin\pdfinfo.exe"
 }
 foreach ($name in $runtimeDefaults.Keys) {
   if (-not (Get-Item "Env:$name" -ErrorAction SilentlyContinue) -and (Test-Path $runtimeDefaults[$name])) {

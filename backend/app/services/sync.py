@@ -43,6 +43,7 @@ from app.repositories.patients import PatientRepository
 from app.schemas.clinical import (
     AllergyCreate,
     AllergyRead,
+    AllergyUpdate,
     ClinicalNoteCreate,
     ClinicalNoteRead,
     ClinicalNoteUpdate,
@@ -53,8 +54,11 @@ from app.schemas.clinical import (
     DocumentRegister,
     MedicationCreate,
     MedicationRead,
+    MedicationUpdate,
     ObservationCreate,
     ObservationRead,
+    ObservationUpdate,
+    EnteredInError,
     PatientIdentifierCreate,
     PatientIdentifierRead,
 )
@@ -252,7 +256,10 @@ class SyncService:
                 operation_type=operation.operation_type,
                 entity_version=version,
                 payload=entity,
-                tombstone=operation.operation_type == "archive",
+                tombstone=(
+                    operation.entity_type == "patient"
+                    and operation.operation_type == "archive"
+                ),
             )
         )
         self.db.add(
@@ -349,8 +356,14 @@ class SyncService:
             ("clinicalNote", "create"): self._note_create,
             ("clinicalNote", "update"): self._note_update,
             ("observation", "create"): self._observation_create,
+            ("observation", "update"): self._observation_update,
+            ("observation", "archive"): self._observation_archive,
             ("allergy", "create"): self._allergy_create,
+            ("allergy", "update"): self._allergy_update,
+            ("allergy", "archive"): self._allergy_archive,
             ("medication", "create"): self._medication_create,
+            ("medication", "update"): self._medication_update,
+            ("medication", "archive"): self._medication_archive,
             ("document", "upload"): self._document_register,
             ("referral", "create"): self._referral_create,
             ("referral", "update"): self._referral_update,
@@ -670,6 +683,56 @@ class SyncService:
         self.db.flush()
         return _dump(ObservationRead.model_validate(observation)), observation.version
 
+    def _observation_update(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(Observation).where(
+                Observation.id == operation.entity_id,
+                Observation.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Observation not found", retryable=True)
+        snapshot = _dump(ObservationRead.model_validate(record))
+        payload = dict(operation.payload)
+        expected = payload.pop("expected_version", operation.base_version)
+        self._check_version(record.version, expected, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("An entered-in-error observation cannot be edited.", retryable=False)
+        data = ObservationUpdate.model_validate(payload)
+        changes = data.model_dump(exclude_unset=True)
+        changes.pop("expected_version", None)
+        if not changes:
+            raise OperationRejected("An observation update must change at least one field.", retryable=False)
+        for field in ("code", "label", "value", "unit", "recorded_at"):
+            if field in changes:
+                if field in {"code", "label", "value", "recorded_at"} and changes[field] is None:
+                    raise OperationRejected(f"Observation {field} cannot be empty.", retryable=False)
+                setattr(record, field, changes[field])
+        record.version += 1
+        self.db.flush()
+        return _dump(ObservationRead.model_validate(record)), record.version
+
+    def _observation_archive(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(Observation).where(
+                Observation.id == operation.entity_id,
+                Observation.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Observation not found", retryable=True)
+        snapshot = _dump(ObservationRead.model_validate(record))
+        data = EnteredInError.model_validate(operation.payload)
+        self._check_version(record.version, data.expected_version or operation.base_version, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("Observation is already entered in error.", retryable=False)
+        record.entered_in_error_at = datetime.now(UTC)
+        record.entered_in_error_by = self.user.id
+        record.entered_in_error_reason = data.reason
+        record.version += 1
+        self.db.flush()
+        return _dump(ObservationRead.model_validate(record)), record.version
+
     def _allergy_create(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
         existing = self.db.get(AllergyRecord, operation.entity_id)
         if existing is not None and existing.clinic_id == self.clinic_id:
@@ -698,6 +761,56 @@ class SyncService:
         self.db.add(allergy)
         self.db.flush()
         return _dump(AllergyRead.model_validate(allergy)), allergy.version
+
+    def _allergy_update(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(AllergyRecord).where(
+                AllergyRecord.id == operation.entity_id,
+                AllergyRecord.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Allergy not found", retryable=True)
+        snapshot = _dump(AllergyRead.model_validate(record))
+        payload = dict(operation.payload)
+        expected = payload.pop("expected_version", operation.base_version)
+        self._check_version(record.version, expected, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("An entered-in-error allergy cannot be edited.", retryable=False)
+        data = AllergyUpdate.model_validate(payload)
+        changes = data.model_dump(exclude_unset=True)
+        changes.pop("expected_version", None)
+        if not changes:
+            raise OperationRejected("An allergy update must change at least one field.", retryable=False)
+        for field in ("substance", "reaction", "severity"):
+            if field in changes:
+                if field in {"substance", "severity"} and changes[field] is None:
+                    raise OperationRejected(f"Allergy {field} cannot be empty.", retryable=False)
+                setattr(record, field, changes[field])
+        record.version += 1
+        self.db.flush()
+        return _dump(AllergyRead.model_validate(record)), record.version
+
+    def _allergy_archive(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(AllergyRecord).where(
+                AllergyRecord.id == operation.entity_id,
+                AllergyRecord.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Allergy not found", retryable=True)
+        snapshot = _dump(AllergyRead.model_validate(record))
+        data = EnteredInError.model_validate(operation.payload)
+        self._check_version(record.version, data.expected_version or operation.base_version, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("Allergy is already entered in error.", retryable=False)
+        record.entered_in_error_at = datetime.now(UTC)
+        record.entered_in_error_by = self.user.id
+        record.entered_in_error_reason = data.reason
+        record.version += 1
+        self.db.flush()
+        return _dump(AllergyRead.model_validate(record)), record.version
 
     def _medication_create(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
         existing = self.db.get(MedicationRecord, operation.entity_id)
@@ -734,6 +847,56 @@ class SyncService:
         self.db.add(medication)
         self.db.flush()
         return _dump(MedicationRead.model_validate(medication)), medication.version
+
+    def _medication_update(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(MedicationRecord).where(
+                MedicationRecord.id == operation.entity_id,
+                MedicationRecord.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Medication not found", retryable=True)
+        snapshot = _dump(MedicationRead.model_validate(record))
+        payload = dict(operation.payload)
+        expected = payload.pop("expected_version", operation.base_version)
+        self._check_version(record.version, expected, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("An entered-in-error medication cannot be edited.", retryable=False)
+        data = MedicationUpdate.model_validate(payload)
+        changes = data.model_dump(exclude_unset=True)
+        changes.pop("expected_version", None)
+        if not changes:
+            raise OperationRejected("A medication update must change at least one field.", retryable=False)
+        for field in ("name", "dose", "frequency", "started_at", "stopped_at"):
+            if field in changes:
+                if field == "name" and changes[field] is None:
+                    raise OperationRejected("Medication name cannot be empty.", retryable=False)
+                setattr(record, field, changes[field])
+        record.version += 1
+        self.db.flush()
+        return _dump(MedicationRead.model_validate(record)), record.version
+
+    def _medication_archive(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        record = self.db.scalar(
+            select(MedicationRecord).where(
+                MedicationRecord.id == operation.entity_id,
+                MedicationRecord.clinic_id == self.clinic_id,
+            ).with_for_update()
+        )
+        if record is None:
+            raise OperationRejected("Medication not found", retryable=True)
+        snapshot = _dump(MedicationRead.model_validate(record))
+        data = EnteredInError.model_validate(operation.payload)
+        self._check_version(record.version, data.expected_version or operation.base_version, snapshot)
+        if record.entered_in_error_at is not None:
+            raise OperationRejected("Medication is already entered in error.", retryable=False)
+        record.entered_in_error_at = datetime.now(UTC)
+        record.entered_in_error_by = self.user.id
+        record.entered_in_error_reason = data.reason
+        record.version += 1
+        self.db.flush()
+        return _dump(MedicationRead.model_validate(record)), record.version
 
     # -------------------------------------------------------------- documents
 

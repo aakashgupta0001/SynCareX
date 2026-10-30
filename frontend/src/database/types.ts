@@ -256,6 +256,9 @@ export interface LocalObservation {
   value: string;
   unit: string;
   recordedAt: string;
+  enteredInErrorAt: string | null;
+  enteredInErrorBy: string | null;
+  enteredInErrorReason: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -269,6 +272,9 @@ export interface LocalAllergy {
   reaction: string;
   severity: "unknown" | "mild" | "moderate" | "severe";
   recordedAt: string;
+  enteredInErrorAt: string | null;
+  enteredInErrorBy: string | null;
+  enteredInErrorReason: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -289,6 +295,9 @@ export interface LocalMedication {
   startedAt: string | null;
   stoppedAt: string | null;
   recordedBy: string | null;
+  enteredInErrorAt: string | null;
+  enteredInErrorBy: string | null;
+  enteredInErrorReason: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;

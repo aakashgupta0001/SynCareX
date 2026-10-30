@@ -16,7 +16,7 @@ third party. Do not use it with real patient data. The section
 | Database | PostgreSQL 16/17 for anything beyond local development; SQLite is the development default |
 | Browser | A Chromium-based browser or Firefox with service worker and IndexedDB support |
 | TLS | Required in front of the API for any deployment. The app refuses to start in production without `COOKIE_SECURE=true` |
-| Local AI (optional) | whisper.cpp and/or Tesseract binaries plus downloaded models. Never required for clinical documentation |
+| Local AI (optional) | whisper.cpp and/or Tesseract binaries plus downloaded models. PDF OCR additionally needs Poppler. Never required for clinical documentation |
 
 ## 2. Install
 
@@ -120,6 +120,16 @@ cd ai_engine && ./run_local.ps1
 
 It generates a fresh bearer token per run, prints it once, binds `127.0.0.1`
 only, and refuses to start without a token.
+
+For optional OCR, install Tesseract with the language data you need. PDF
+support additionally requires Poppler for Windows; set
+`SYNCAREX_PDFTOPPM_BIN` and `SYNCAREX_PDFINFO_BIN` to its `pdftoppm.exe` and
+`pdfinfo.exe` paths, or place them under
+`%USERPROFILE%\.syncarex\bin\poppler\Library\bin` for automatic discovery.
+The AI workspace also offers mobile camera capture. PDFs are limited to 10
+pages per request. Printed text is best supported; handwriting recognition is
+experimental and must be verified manually. No OCR inference has been
+validated for clinical use.
 
 ## 7. Backup and recovery
 

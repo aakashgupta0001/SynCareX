@@ -16,7 +16,7 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 | Feature | Status | Evidence |
 |---|---|---|
 | Encrypted local database (Dexie/IndexedDB) | Implemented and tested | 15 stores; AES-GCM envelopes; schema versioning with forward migration |
-| Local repositories and CRUD | Implemented and tested | `offlinePersistence.test.ts`, 10 tests |
+| Local repositories and CRUD | Implemented and tested | `offlinePersistence.test.ts`, 11 tests |
 | Durable operation queue | Implemented and tested | Idempotency keys, dedupe keys, exponential backoff; survives restart |
 | Offline search and pagination | Implemented and tested | Verified offline in a real browser |
 | Local search indexing | Implemented and tested | Blind trigram index (keyed HMAC only); identical results to a full scan with fewer decryptions |
@@ -56,7 +56,7 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 | Feature | Status | Evidence |
 |---|---|---|
 | Patients, identifiers, consultations, notes | Implemented and tested | |
-| Observations, allergies, medications | Implemented but partially tested | Local write paths tested; limited UI coverage |
+| Observations, allergies, medications | Implemented and tested | Offline edits and entered-in-error archive; server version checks preserve stale edits as conflicts |
 | Documents | Implemented and tested | |
 | Referrals | Implemented but partially tested | Offline draft and status flow tested |
 | Follow-ups | Implemented but partially tested | Offline scheduling tested |
@@ -76,7 +76,7 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 | Graceful unavailability | Implemented and tested | Interface states it plainly; all clinical workflows keep working |
 | Speech transcription | **Blocked** | whisper.cpp not installed; no inference executed |
 | Speech translation to English | Implemented but **unverified** | Exposed as a task on the transcription endpoint; contract tested, no inference executed |
-| OCR | **Blocked** | Tesseract not installed; no inference executed |
+| OCR | **Blocked** | Image and PDF workflows are implemented; Tesseract and Poppler are not installed here, so no inference was executed. Printed text is targeted; handwriting is experimental |
 | Structured extraction | **Blocked** | No local LLM model downloaded |
 | History retrieval ranking | Implemented and tested | Lexical relevance ranking before the context budget; **not** semantic retrieval, no embeddings |
 | Clinician review enforcement | Implemented and tested | Unsupported evidence leaves an extraction unreviewed |
@@ -86,13 +86,13 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 
 All figures produced by running the commands.
 
-- Frontend unit and component tests: **69 passed** (9 files)
-- Backend tests: **144 passed**
-- AI engine tests: **14 passed**
+- Frontend unit and component tests: **72 passed** (9 files)
+- Backend tests: **145 passed**
+- AI engine tests: **19 passed**
 - Offline acceptance in a real browser: **19 PASS, 6 BLOCKED, 0 FAIL**
 - Two-device synchronization: **8 PASS, 0 FAIL**
-- Typecheck and production build: clean, 20 precache entries (747.66 KiB)
-- Alembic: clean upgrade on an empty database; `alembic check` reports no drift
+- Typecheck and production build: passed, 20 precache entries (767.00 KiB)
+- Alembic: one migration head; PostgreSQL SQL generated for entered-in-error columns and foreign keys (not applied to a live PostgreSQL database)
 - `npm audit --omit=dev`: **0 vulnerabilities** in production dependencies
 
 ## Known security limitations
@@ -114,6 +114,10 @@ All figures produced by running the commands.
 
 - No model or runtime was available during this audit, so transcription, OCR
   and extraction are **unverified**. They are not claimed to work.
+- OCR now accepts image uploads, mobile camera captures and PDFs up to 10
+  pages. PDF conversion requires Poppler; preprocessing uses Tesseract's
+  adaptive thresholding. Handwriting recognition is experimental and
+  unvalidated.
 - The audit machine is a developer laptop and says nothing about performance
   on a field device.
 - Model downloads require internet and were unreachable in this environment.
@@ -147,7 +151,7 @@ recommend treatment. No compliance certification is claimed.
 | Local DB of records, histories and pending changes | Implemented and tested |
 | Voice capture | Implemented and tested |
 | Whisper.cpp speech recognition | Implemented, **unverified** (no model) |
-| OCR document scanning | Implemented, **unverified** (no runtime) |
+| OCR document scanning | Image/camera/PDF inputs implemented, **unverified** (no runtime); handwriting experimental |
 | Quantized LLM extraction | Implemented, **unverified** (no model) |
 | Language translation | Implemented, **unverified** (no model) |
 | Local search indexing | Implemented and tested |

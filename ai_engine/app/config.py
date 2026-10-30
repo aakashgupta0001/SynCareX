@@ -13,6 +13,8 @@ class Settings:
     max_upload_bytes: int = 25 * 1024 * 1024
     llama_binary: str | None = None
     ffmpeg_binary: str | None = None
+    pdftoppm_binary: str | None = None
+    pdfinfo_binary: str | None = None
 
 
 def get_settings() -> Settings:
@@ -38,4 +40,6 @@ def get_settings() -> Settings:
         allowed_origins=origins,
         llama_binary=os.environ.get("SYNCAREX_LLAMA_BIN"),
         ffmpeg_binary=os.environ.get("SYNCAREX_FFMPEG_BIN"),
+        pdftoppm_binary=os.environ.get("SYNCAREX_PDFTOPPM_BIN"),
+        pdfinfo_binary=os.environ.get("SYNCAREX_PDFINFO_BIN"),
     )

@@ -94,6 +94,15 @@ class ObservationCreate(BaseModel):
     recorded_at: datetime | None = None
 
 
+class ObservationUpdate(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+    code: str | None = Field(default=None, min_length=1, max_length=64)
+    label: str | None = Field(default=None, min_length=1, max_length=160)
+    value: str | None = Field(default=None, min_length=1, max_length=160)
+    unit: str | None = Field(default=None, max_length=32)
+    recorded_at: datetime | None = None
+
+
 class ObservationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -105,7 +114,15 @@ class ObservationRead(BaseModel):
     value: str
     unit: str | None
     recorded_at: datetime
+    entered_in_error_at: datetime | None
+    entered_in_error_by: UUID | None
+    entered_in_error_reason: str | None
     version: int
+
+
+class EnteredInError(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+    reason: str = Field(min_length=3, max_length=500)
 
 
 class AllergyCreate(BaseModel):
@@ -114,6 +131,13 @@ class AllergyCreate(BaseModel):
     substance: str = Field(min_length=1, max_length=160)
     reaction: str | None = Field(default=None, max_length=240)
     severity: Literal["unknown", "mild", "moderate", "severe"] = "unknown"
+
+
+class AllergyUpdate(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+    substance: str | None = Field(default=None, min_length=1, max_length=160)
+    reaction: str | None = Field(default=None, max_length=240)
+    severity: Literal["unknown", "mild", "moderate", "severe"] | None = None
 
 
 class AllergyRead(BaseModel):
@@ -125,6 +149,9 @@ class AllergyRead(BaseModel):
     reaction: str | None
     severity: str
     recorded_at: datetime
+    entered_in_error_at: datetime | None
+    entered_in_error_by: UUID | None
+    entered_in_error_reason: str | None
     version: int
 
 
@@ -143,6 +170,15 @@ class MedicationCreate(BaseModel):
     started_at: date | None = None
 
 
+class MedicationUpdate(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    dose: str | None = Field(default=None, max_length=120)
+    frequency: str | None = Field(default=None, max_length=120)
+    started_at: date | None = None
+    stopped_at: date | None = None
+
+
 class MedicationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -154,6 +190,9 @@ class MedicationRead(BaseModel):
     frequency: str | None
     started_at: date | None
     stopped_at: date | None
+    entered_in_error_at: datetime | None
+    entered_in_error_by: UUID | None
+    entered_in_error_reason: str | None
     version: int
 
 

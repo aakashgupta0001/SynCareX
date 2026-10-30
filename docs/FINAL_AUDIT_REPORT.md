@@ -30,9 +30,9 @@ Assessed by reading the code and running it, not from prior claims.
 | Phase | Status | Basis |
 |---|---|---|
 | 1 — UI foundation | **Implemented and tested** | 18 pages, routed and reachable; navigation, forms, loading, empty and error states exercised by unit and end-to-end tests |
-| 2 — Database and backend | **Implemented and tested** | Auth, RBAC, clinic-scoped CRUD, clinical tables, documents, audit. 144 backend tests pass. Four Alembic migrations apply to a clean database and round-trip |
+| 2 — Database and backend | **Implemented and tested** | Auth, RBAC, clinic-scoped CRUD, version-checked observation/allergy/medication correction, clinical tables, documents, audit. 145 backend tests pass. The entered-in-error migration is the single Alembic head; PostgreSQL SQL was generated but not applied to a live database in this verification |
 | 3 — Offline engine | **Implemented and tested** | Dexie v2+ encrypted stores, durable queue with backoff and idempotency, PWA shell, connectivity probing. Verified end to end on a persistent browser profile |
-| 4 — AI engine | **Implemented but NOT verified** | A complete local service exists: model catalog with pinned SHA-256 digests, verified atomic download, readiness detection, bearer-token auth, subprocess providers for whisper and Tesseract. **No model or runtime was available on the audit machine, so no inference of any kind was executed.** 14 infrastructure tests pass; none exercises a real model |
+| 4 — AI engine | **Implemented but NOT verified** | A complete local service exists: model catalog with pinned SHA-256 digests, verified atomic download, readiness detection, bearer-token auth, subprocess providers for whisper and Tesseract. **No model or runtime was available on the audit machine, so no inference of any kind was executed.** 19 infrastructure tests pass; none exercises a real model |
 | 5 — Synchronization | **Implemented and tested** | Push with server-side idempotency ledger, per-operation results, partial batches, conflict reporting, and a cursor-paged pull change feed. **The pull half was broken until this audit** (see §3) |
 | 6 — Continuity and integrity | **Implemented, partially tested** | Referrals, follow-ups, emergency passport, clinic transfer, FHIR bundle export, integrity guardian. 6 backend and 14 frontend tests cover them. The passport code image is not a scannable QR code (relabelled). Several UI defects found and fixed |
 
@@ -98,12 +98,12 @@ payloads return zero rows, and logout invalidates an unexpired access token.
 
 | Suite | Command | Result |
 |---|---|---|
-| Frontend unit and component | `npm test` | **69 passed** (9 files) |
-| Backend | `python -m pytest` | **144 passed** |
-| AI engine | `python -m pytest ai_engine/tests` | **14 passed** |
+| Frontend unit and component | `npm test` | **72 passed** (9 files) |
+| Backend | `python -m pytest` | **145 passed** |
+| AI engine | `python -m pytest ai_engine/tests` | **19 passed** |
 | Typecheck | `tsc -b` | clean |
-| Production build | `npm run build` | passed, 20 precache entries (747.66 KiB) |
-| Migrations | `alembic upgrade head` on a clean DB, then `alembic check` | clean, no drift |
+| Production build | `npm run build` | passed, 20 precache entries (767.00 KiB) |
+| Migrations | `alembic heads`; PostgreSQL `alembic upgrade --sql head` | one head; entered-in-error DDL generated, not applied to a live database |
 | Offline acceptance (browser) | `npx playwright test e2e/offline-acceptance.spec.ts` | **19 PASS, 6 BLOCKED, 0 FAIL** |
 | Two-device sync (browser) | `npx playwright test e2e/two-device-sync.spec.ts` | **8 PASS, 0 FAIL** |
 | Phase 2 offline e2e | `npx playwright test e2e/offline.spec.ts` | 2 passed |
@@ -115,6 +115,10 @@ payloads return zero rows, and logout invalidates an unexpired access token.
 parametrised sweeps over every route), 2 pull regression tests, 6 frontend
 continuity-offline tests, a Phase 6 accessible-name regression test, and 2
 browser suites (offline acceptance, two-device sync).
+
+**OCR follow-up tests:** 5 engine tests cover image preprocessing and
+thresholding, PDF conversion/page markers, the PDF page cap, and missing
+Poppler; the frontend test checks PDF selection and camera capture settings.
 
 Nothing was skipped, weakened or marked passing to obtain a green result.
 Where a capability could not be exercised, it is recorded as **blocked** with
@@ -144,15 +148,15 @@ Measured, not estimated. Single-machine figures from the runs above.
 
 | Measure | Observed |
 |---|---|
-| Production build | ~7.5 s; main bundle 686.47 KB raw / 195.00 KB gzipped |
-| Service worker precache | 20 entries, 747.66 KiB |
+| Production build | ~7.4 s; main bundle 706.16 KB raw / 197.77 KB gzipped |
+| Service worker precache | 20 entries, 767.00 KiB |
 | Cold start to interactive, offline | Under 2 s on the test machine |
 | Offline sign-in (PBKDF2, 310,000 iterations) | ~0.3–0.5 s, deliberate cost |
 | Full offline acceptance run (2 browser launches, 20 steps) | ~10 s of interaction |
 | Two-device suite (2 persistent profiles, sync cycles) | ~7 minutes wall clock, dominated by sync waits |
-| Backend suite | 144 tests in ~48 s |
-| Frontend unit suite | 69 tests in ~11.5 s |
-| AI engine suite | 14 tests in ~2 s |
+| Backend suite | 145 tests in ~49 s |
+| Frontend unit suite | 72 tests in ~9 s |
+| AI engine suite | 19 tests in ~5 s |
 | Browser storage quota | 10.00 GiB; persistent storage not granted by default |
 
 Pagination is bounded everywhere it matters: patient lists page at 10–20,
@@ -168,7 +172,7 @@ the device.
 |---|---|
 | Audit machine | 16 GB RAM, 12 logical processors, WebGPU and WebAssembly available |
 | whisper.cpp | **Not installed.** No transcription was executed |
-| Tesseract | **Not installed.** No OCR was executed |
+| Tesseract / Poppler | **Not installed.** Image/PDF OCR was not executed |
 | Local LLM | **No model downloaded.** No extraction was executed |
 | Model download | Blocked in this environment; HuggingFace URLs in the catalog were unreachable |
 | Consequence | Phase 4 cannot be called verified. The service's infrastructure — pinned digests, verified atomic install, readiness detection, token auth, graceful unavailability — is tested; inference is not |

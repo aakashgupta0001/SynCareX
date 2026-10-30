@@ -63,13 +63,22 @@ function mapSnapshot(
     snapshot.authorId = snapshot.authorId ?? null;
   } else if (type === "observation") {
     snapshot.unit = snapshot.unit ?? "";
+    snapshot.enteredInErrorAt = snapshot.enteredInErrorAt ?? null;
+    snapshot.enteredInErrorBy = snapshot.enteredInErrorBy ?? null;
+    snapshot.enteredInErrorReason = snapshot.enteredInErrorReason ?? null;
   } else if (type === "allergy") {
     snapshot.reaction = snapshot.reaction ?? "";
+    snapshot.enteredInErrorAt = snapshot.enteredInErrorAt ?? null;
+    snapshot.enteredInErrorBy = snapshot.enteredInErrorBy ?? null;
+    snapshot.enteredInErrorReason = snapshot.enteredInErrorReason ?? null;
   } else if (type === "medication") {
     snapshot.dose = snapshot.dose ?? "";
     snapshot.frequency = snapshot.frequency ?? "";
     snapshot.stoppedAt = snapshot.stoppedAt ?? null;
     snapshot.recordedBy = snapshot.recordedBy ?? null;
+    snapshot.enteredInErrorAt = snapshot.enteredInErrorAt ?? null;
+    snapshot.enteredInErrorBy = snapshot.enteredInErrorBy ?? null;
+    snapshot.enteredInErrorReason = snapshot.enteredInErrorReason ?? null;
   }
   return snapshot;
 }

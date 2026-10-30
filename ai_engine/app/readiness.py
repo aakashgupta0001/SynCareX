@@ -81,6 +81,8 @@ def runtime_paths(settings: Settings) -> dict[str, str | None]:
         "tesseract": resolve_runtime(settings.tesseract_binary, "tesseract"),
         "llama": llama_runtime,
         "ffmpeg": resolve_runtime(settings.ffmpeg_binary, "ffmpeg"),
+        "pdftoppm": resolve_runtime(settings.pdftoppm_binary, "pdftoppm"),
+        "pdfinfo": resolve_runtime(settings.pdfinfo_binary, "pdfinfo"),
     }
 
 
@@ -111,6 +113,14 @@ def build_status(settings: Settings) -> EngineStatus:
             "ffmpeg": RuntimeStatus(
                 available=bool(runtimes["ffmpeg"]),
                 executable=runtimes["ffmpeg"],
+            ),
+            "pdftoppm": RuntimeStatus(
+                available=bool(runtimes["pdftoppm"]),
+                executable=runtimes["pdftoppm"],
+            ),
+            "pdfinfo": RuntimeStatus(
+                available=bool(runtimes["pdfinfo"]),
+                executable=runtimes["pdfinfo"],
             ),
         },
     )

@@ -497,6 +497,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .note-entry { padding: 12px 14px; border: 1px solid var(--border); border-radius: 11px; background: #fbfdfc; }
 .note-entry p { margin: 8px 0 6px; color: #41524e; font-size: 11px; line-height: 1.65; white-space: pre-wrap; }
 .note-entry small { color: #8b9994; font-size: 9px; }
+.clinical-edit-form { display: grid; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .note-type { display: inline-block; padding: 3px 8px; border-radius: 999px; color: #37608f; background: #eef4fb; font-size: 9px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; }
 
 .attachment-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
