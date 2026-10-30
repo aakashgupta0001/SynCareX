@@ -19,11 +19,12 @@ Roles map to the product's three personas:
   "Patient" row in the staff roles table would invite putting patients into
   the staff login, which the portal design exists to avoid.
 
-The admin credentials below are for the local pilot database. The password is
-weak by explicit request; change it before any real deployment (the login
-throttle will slow guessing, not stop a leak).
+The admin password is read from the SYNAREX_SEED_ADMIN_PASSWORD environment
+variable (or the --password argument) — never hard-coded, because this file
+sits in a public repository.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -33,7 +34,9 @@ from app.security.passwords import hash_password  # noqa: E402
 
 ADMIN_EMAIL = "aakashgupta76342@gmail.com"
 ADMIN_NAME = "Aakash Gupta"
-ADMIN_PASSWORD = "123456"
+# Supply via env var or --password; refused when missing or weaker than 12
+# characters, exactly like the production fail-safe.
+ADMIN_PASSWORD = os.environ.get("SYNAREX_SEED_ADMIN_PASSWORD", "")
 
 CLINIC_NAME = "SynCareX Demonstration Clinic"
 
@@ -68,6 +71,12 @@ ROLE_PERMISSIONS = {
 
 
 def main() -> None:
+    if len(ADMIN_PASSWORD) < 12:
+        raise SystemExit(
+            "Set SYNAREX_SEED_ADMIN_PASSWORD to a unique password of at least "
+            "12 characters. Example (PowerShell): "
+            "$env:SYNAREX_SEED_ADMIN_PASSWORD = 'your-strong-password'"
+        )
     from app.database import engine
     from app.models import Clinic, Permission, Role, User
     from app.models.entities import Base
@@ -116,7 +125,7 @@ def main() -> None:
         user.is_active = True
         user.password_hash = hash_password(ADMIN_PASSWORD)
         db.commit()
-        print(f"password set to the requested value (weak — change before production)")
+        print(f"password set from SYNAREX_SEED_ADMIN_PASSWORD ({len(ADMIN_PASSWORD)} characters)")
         print(f"clinic: {CLINIC_NAME}")
 
 
