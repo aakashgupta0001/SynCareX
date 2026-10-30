@@ -1,0 +1,1 @@
+"""SynCareX local AI engine."""

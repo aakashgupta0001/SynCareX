@@ -1,0 +1,30 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+node_modules/
+dist/
+coverage/
+.vite/
+*.log
+*.sqlite3
+*.db
+# Downloaded AI weights and uploaded files at the repository root.
+# Scoped so they cannot swallow source directories such as
+# backend/app/models.
+/uploads/
+/models/
+/ai_engine/models/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+backend/var/
+frontend/test-results/
+frontend/playwright-report/
+frontend/dist/

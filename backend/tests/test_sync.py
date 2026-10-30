@@ -1,0 +1,506 @@
+import hashlib
+import io
+from uuid import uuid4
+
+DEVICE_ID = "11111111-2222-3333-4444-555555555555"
+PASSWORD = "synthetic-test-password"
+
+
+def login(client, email="doctor@example.com"):
+    response = client.post(
+        "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+def provision(client, headers, device_id=DEVICE_ID):
+    response = client.post(
+        "/api/v1/sync/devices/provision",
+        json={"device_id": device_id, "label": "Test browser"},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def key(seed: str) -> str:
+    return hashlib.sha256(seed.encode()).hexdigest()
+
+
+def operation(**overrides):
+    base = {
+        "operation_id": str(uuid4()),
+        "idempotency_key": key(str(uuid4())),
+        "entity_type": "patient",
+        "entity_id": str(uuid4()),
+        "operation_type": "create",
+        "base_version": 0,
+        "local_version": 1,
+        "payload": {},
+    }
+    base.update(overrides)
+    return base
+
+
+def patient_payload(**overrides):
+    return {
+        "full_name": "Synthetic Offline Patient",
+        "estimated_age": 44,
+        "village": "Offline Village",
+        "allergies": ["unknown"],
+        **overrides,
+    }
+
+
+def send(client, headers, operations, device_id=DEVICE_ID):
+    return client.post(
+        "/api/v1/sync/operations",
+        json={"device_id": device_id, "operations": operations},
+        headers=headers,
+    )
+
+
+def test_sync_requires_authentication_and_a_provisioned_device(api_client) -> None:
+    client = api_client["client"]
+    anonymous = send(client, {}, [operation()])
+    assert anonymous.status_code == 401
+
+    headers = login(client)
+    unprovisioned = send(client, headers, [operation()])
+    assert unprovisioned.status_code == 403
+    assert "not provisioned" in unprovisioned.json()["detail"]
+
+
+def test_queued_patient_operation_is_acknowledged_once_and_never_duplicated(
+    api_client,
+) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    create = operation(
+        entity_id=patient_id,
+        idempotency_key=key(f"create:{patient_id}"),
+        payload=patient_payload(),
+    )
+
+    first = send(client, headers, [create])
+    assert first.status_code == 200, first.text
+    first_result = first.json()["results"][0]
+    assert first_result["status"] == "acknowledged"
+    assert first_result["duplicate"] is False
+    assert first_result["server_version"] == 1
+
+    # The device never saw the response and retries the identical operation.
+    second = send(client, headers, [create])
+    assert second.status_code == 200
+    second_result = second.json()["results"][0]
+    assert second_result["status"] == "acknowledged"
+    assert second_result["duplicate"] is True
+
+    listed = client.get("/api/v1/patients?search=Offline+Village", headers=headers)
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+
+
+def test_replay_key_cannot_be_reused_for_different_operation_content(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+    patient_id = str(uuid4())
+    create = operation(
+        entity_id=patient_id,
+        idempotency_key=key(f"identity:{patient_id}"),
+        payload=patient_payload(),
+    )
+    first = send(client, headers, [create])
+    assert first.status_code == 200
+    assert first.json()["results"][0]["status"] == "acknowledged"
+
+    tampered = {**create, "payload": patient_payload(village="Changed replay payload")}
+    replay = send(client, headers, [tampered])
+    assert replay.status_code == 200
+    result = replay.json()["results"][0]
+    assert result["status"] == "rejected"
+    assert result["retryable"] is False
+    current = client.get(f"/api/v1/patients/{patient_id}", headers=headers).json()
+    assert current["village"] == "Offline Village"
+
+
+def test_pull_feed_is_paged_and_includes_direct_online_patient_updates(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    created = client.post(
+        "/api/v1/patients",
+        json=patient_payload(),
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    patient_id = created.json()["id"]
+    updated = client.patch(
+        f"/api/v1/patients/{patient_id}",
+        json={"village": "Online clinic update", "expected_version": 1},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+
+    first = client.get(
+        "/api/v1/sync/changes",
+        params={"device_id": DEVICE_ID, "cursor": 0, "limit": 1},
+        headers=headers,
+    )
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert len(first_body["changes"]) == 1
+    assert first_body["has_more"] is True
+    assert first_body["changes"][0]["entity_type"] == "patient"
+
+    second = client.get(
+        "/api/v1/sync/changes",
+        params={
+            "device_id": DEVICE_ID,
+            "cursor": first_body["next_cursor"],
+            "limit": 1,
+        },
+        headers=headers,
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["changes"][0]["payload"]["village"] == "Online clinic update"
+    assert second.json()["has_more"] is False
+
+
+def test_concurrent_edit_is_reported_as_a_conflict_without_overwriting(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"create:{patient_id}"),
+                payload=patient_payload(),
+            )
+        ],
+    )
+
+    # A clinician on another device saves first.
+    online_edit = client.patch(
+        f"/api/v1/patients/{patient_id}",
+        json={"village": "Edited by another device", "expected_version": 1},
+        headers=headers,
+    )
+    assert online_edit.status_code == 200
+
+    stale = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"update:{patient_id}"),
+                operation_type="update",
+                base_version=1,
+                local_version=2,
+                payload={"village": "Offline edit", "expected_version": 1},
+            )
+        ],
+    )
+    assert stale.status_code == 200
+    result = stale.json()["results"][0]
+    assert result["status"] == "conflict"
+    assert result["server_version"] == 2
+    assert result["entity"]["village"] == "Edited by another device"
+    assert stale.json()["conflicts"] == 1
+
+    current = client.get(f"/api/v1/patients/{patient_id}", headers=headers).json()
+    assert current["village"] == "Edited by another device"
+    assert current["version"] == 2
+
+
+def test_batch_is_partially_applied_and_out_of_order_records_stay_retryable(
+    api_client,
+) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    consultation_id = str(uuid4())
+    orphan_consultation = str(uuid4())
+
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"p:{patient_id}"),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=consultation_id,
+                idempotency_key=key(f"c:{consultation_id}"),
+                entity_type="consultation",
+                payload={"patient_id": patient_id, "reason": "Fever review"},
+            ),
+            operation(
+                entity_id=str(uuid4()),
+                idempotency_key=key(f"n:{orphan_consultation}"),
+                entity_type="clinicalNote",
+                payload={
+                    "patient_id": patient_id,
+                    "consultation_id": orphan_consultation,
+                    "body": "Clinician-authored note for an unsynchronized consultation.",
+                },
+            ),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["acknowledged"] == 2
+    assert body["rejected"] == 1
+
+    rejected = body["results"][2]
+    assert rejected["status"] == "rejected"
+    # The device must keep retrying this one rather than discarding the note.
+    assert rejected["retryable"] is True
+
+    consultations = client.get(
+        f"/api/v1/consultations?patient_id={patient_id}", headers=headers
+    )
+    assert consultations.status_code == 200
+    assert consultations.json()["total"] == 1
+
+
+def test_clinical_note_and_document_round_trip(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    consultation_id = str(uuid4())
+    note_id = str(uuid4())
+    document_id = str(uuid4())
+    content = b"%PDF-1.4 synthetic test document"
+    checksum = hashlib.sha256(content).hexdigest()
+
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"p2:{patient_id}"),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=consultation_id,
+                idempotency_key=key(f"c2:{consultation_id}"),
+                entity_type="consultation",
+                payload={"patient_id": patient_id, "notes": "Initial draft"},
+            ),
+            operation(
+                entity_id=note_id,
+                idempotency_key=key(f"n2:{note_id}"),
+                entity_type="clinicalNote",
+                payload={
+                    "patient_id": patient_id,
+                    "consultation_id": consultation_id,
+                    "body": "Documented history and examination findings.",
+                },
+            ),
+            operation(
+                entity_id=document_id,
+                idempotency_key=key(f"d2:{document_id}"),
+                entity_type="document",
+                operation_type="upload",
+                payload={
+                    "patient_id": patient_id,
+                    "consultation_id": consultation_id,
+                    "file_name": "referral.pdf",
+                    "mime_type": "application/pdf",
+                    "byte_size": len(content),
+                    "checksum": checksum,
+                    "description": "Synthetic referral letter",
+                },
+            ),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["acknowledged"] == 4
+
+    notes = client.get(
+        f"/api/v1/consultations/{consultation_id}/notes", headers=headers
+    )
+    assert notes.status_code == 200
+    assert notes.json()["items"][0]["body"].startswith("Documented history")
+
+    documents = client.get(
+        f"/api/v1/documents?patient_id={patient_id}", headers=headers
+    )
+    assert documents.json()["total"] == 1
+    assert documents.json()["items"][0]["content_received_at"] is None
+
+    upload = client.post(
+        f"/api/v1/documents/{document_id}/content",
+        files={"file": ("referral.pdf", io.BytesIO(content), "application/pdf")},
+        headers=headers,
+    )
+    assert upload.status_code == 200, upload.text
+    assert upload.json()["content_received_at"] is not None
+
+    # A retried upload of the same bytes must not store a second copy.
+    retry = client.post(
+        f"/api/v1/documents/{document_id}/content",
+        files={"file": ("referral.pdf", io.BytesIO(content), "application/pdf")},
+        headers=headers,
+    )
+    assert retry.status_code == 200
+    assert retry.json()["id"] == document_id
+
+    download = client.get(f"/api/v1/documents/{document_id}/content", headers=headers)
+    assert download.status_code == 200
+    assert download.content == content
+
+
+def test_document_upload_rejects_corrupted_content(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    document_id = str(uuid4())
+    content = b"%PDF-1.4 original bytes"
+    send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"p3:{patient_id}"),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=document_id,
+                idempotency_key=key(f"d3:{document_id}"),
+                entity_type="document",
+                operation_type="upload",
+                payload={
+                    "patient_id": patient_id,
+                    "file_name": "scan.png",
+                    "mime_type": "image/png",
+                    "byte_size": len(content),
+                    "checksum": hashlib.sha256(content).hexdigest(),
+                },
+            ),
+        ],
+    )
+
+    tampered = content.replace(b"original", b"modified")
+    response = client.post(
+        f"/api/v1/documents/{document_id}/content",
+        files={"file": ("scan.png", io.BytesIO(tampered), "image/png")},
+        headers=headers,
+    )
+    assert response.status_code == 422
+    assert "checksum" in response.json()["detail"]
+
+
+def test_device_provisioning_is_scoped_to_the_signed_in_clinic(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    first = provision(client, headers)
+    again = provision(client, headers)
+    assert first["server_device_id"] == again["server_device_id"]
+    assert first["offline_grace_days"] >= 1
+
+    nurse_headers = login(client, "nurse@example.com")
+    nurse_device = provision(client, nurse_headers, device_id="99999999-aaaa-bbbb-cccc-dddddddddddd")
+    assert nurse_device["device_id"] != first["device_id"]
+
+
+def test_unsupported_operation_is_rejected_without_retry(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_type="allergy",
+                operation_type="archive",
+                payload={"patient_id": str(uuid4())},
+            )
+        ],
+    )
+    result = response.json()["results"][0]
+    assert result["status"] == "rejected"
+    assert result["retryable"] is False
+
+
+def test_pull_changes_accepts_its_own_default_limit(api_client) -> None:
+    """
+    Regression for a defect where /sync/changes defaulted limit to 200 but
+    validated it against the push batch limit of 50, so every pull using the
+    default was rejected and no device ever received another device's work.
+    """
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    # No explicit limit: the route's own default must be acceptable.
+    response = client.get(f"/api/v1/sync/changes?device_id={DEVICE_ID}", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "changes" in body and "next_cursor" in body
+
+    # An explicit value within the pull limit is accepted.
+    assert (
+        client.get(
+            f"/api/v1/sync/changes?device_id={DEVICE_ID}&limit=200", headers=headers
+        ).status_code
+        == 200
+    )
+    # Beyond the pull limit it is still refused.
+    too_big = client.get(
+        f"/api/v1/sync/changes?device_id={DEVICE_ID}&limit=5000", headers=headers
+    )
+    assert too_big.status_code == 422
+
+
+def test_a_record_pushed_by_one_device_is_pulled_by_another(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers, device_id=DEVICE_ID)
+    second_device = "22222222-3333-4444-5555-666666666666"
+    provision(client, headers, device_id=second_device)
+
+    patient_id = str(uuid4())
+    pushed = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"pull:{patient_id}"),
+                payload=patient_payload(full_name="Pulled Synthetic Patient"),
+            )
+        ],
+    )
+    assert pushed.json()["acknowledged"] == 1
+
+    pulled = client.get(
+        f"/api/v1/sync/changes?device_id={second_device}", headers=headers
+    )
+    assert pulled.status_code == 200, pulled.text
+    entity_ids = [change["entity_id"] for change in pulled.json()["changes"]]
+    assert patient_id in entity_ids

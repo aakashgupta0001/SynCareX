@@ -1,0 +1,3 @@
+# Optional CPU-only structured extraction runtime. Install only after reviewing
+# the llama-cpp-python build requirements for the local operating system.
+llama-cpp-python>=0.3,<0.4
