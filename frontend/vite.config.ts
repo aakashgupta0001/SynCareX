@@ -20,12 +20,14 @@ const apiProxy = {
 };
 
 export default defineConfig(({ mode }) => ({
-  // `npm run dev:https` serves with a self-signed certificate so phones and
-  // tablets on the LAN get a secure context — without it the browser
-  // disables crypto.subtle and the vault cannot unlock at all.
+  // `npm run dev:https` and `npm run preview:https` serve with a
+  // self-signed certificate so phones and tablets on the LAN get a secure
+  // context — without it the browser disables crypto.subtle and the vault
+  // cannot unlock at all. Devices must use preview:https for offline
+  // installs: the service worker precache only exists in a build.
   https: mode === "https",
   server: { proxy: apiProxy },
-  preview: { proxy: apiProxy },
+  preview: { proxy: apiProxy, https: mode === "https" },
   plugins: [
     ...(mode === "https" ? [basicSsl()] : []),
     react(),
