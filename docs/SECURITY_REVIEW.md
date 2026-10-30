@@ -15,7 +15,7 @@ was used; every test record is synthetic.
 | P0 critical | 0 | 0 | 0 |
 | P1 major | 3 | 3 | 0 |
 | P2 moderate | 4 | 4 | 0 |
-| P3 minor | 4 | 1 | 3 |
+| P3 minor | 4 | 2 | 2 |
 
 No unauthorized data access path was found. The three P1 findings were a
 broken production secret check, a broken synchronization pull, and a build
@@ -155,13 +155,14 @@ previously failed to load with nothing visible to the clinician. Verified: no
 `console.*` call remains in `src/pages`, `src/components`, `src/services` or
 `src/repositories`.
 
-### P2-4 Form labels are not associated with their controls — OPEN
+### P2-4 Phase 6 form controls lacked accessible names — FIXED
 
-In the Phase 6 pages (`AIWorkspacePage`, `FollowUpsPage`, `PassportPage`,
-`ReferralsPage`, `TransfersPage`) roughly 48 `<label>` elements are siblings
-of their input rather than wrapping it or using `htmlFor`. Screen readers do
-not announce the label, and the fields cannot be reached by accessible name.
-The Phase 1–2 pages wrap their inputs and are correct.
+The follow-up, passport, referral and transfer pages now associate visible
+labels with their controls using `htmlFor`/`id`; the FHIR patient selector
+has a screen-reader label. The AI workspace already wrapped its controls in
+labels. Passport's data-minimization heading is now a fieldset legend rather
+than a misleading label for the whole group. A frontend regression test
+renders each page and verifies the controls by accessible label.
 
 ### P3-1 The emergency passport "QR code" is not scannable — FIXED (relabelled)
 
@@ -184,12 +185,13 @@ cramped tablet layout — reduced it from 260px to 35px. Cosmetic: no control
 is unreachable and no content is cut off. Covered by an expected-to-fail test
 in `e2e/ui-quality.spec.ts`.
 
-### P3-2 Development helper scripts committed to the repository — OPEN
+### P3-2 Development helper scripts committed to the repository — FIXED
 
 `frontend/fix_syntax.py`, `frontend/scripts_fix.py`, `frontend/update_db.py`,
 `frontend/update_layout.py`, `frontend/update_types.py`,
 `backend/scripts/update_models.py` and `backend/scripts/update_sync.py` are
-one-off edit scripts, not part of the application. They should be removed.
+one-off edit scripts, not part of the application. All seven have been
+removed.
 
 ### P3-3 Dev-dependency advisories — PARTIALLY ADDRESSED
 
@@ -204,7 +206,7 @@ channel instead.
 
 ## Recommendations before any pilot
 
-1. Close P2-4 (label association) and P3-4 (horizontal scroll).
+1. Close P3-4 (horizontal scroll).
 2. Add a server-side hash chain or signature if audit history is ever to be
    presented as tamper-evident. Today it is not.
 3. Have a qualified third party review the cryptography and run a penetration

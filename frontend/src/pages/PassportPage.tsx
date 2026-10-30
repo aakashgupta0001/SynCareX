@@ -220,10 +220,11 @@ export function PassportPage() {
             </h2>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="passport-patient" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Select Local Patient
               </label>
               <select
+                id="passport-patient"
                 className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                 value={selectedPatientId}
                 onChange={(e) => setSelectedPatientId(e.target.value)}
@@ -237,10 +238,11 @@ export function PassportPage() {
             </div>
 
             <div className="border-t border-slate-100 pt-4">
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-2">
-                Data Minimization: Essential Fields Only
-              </label>
-              <div className="space-y-2">
+              <fieldset>
+                <legend className="block text-xs font-semibold text-slate-700 uppercase mb-2">
+                  Data Minimization: Essential Fields Only
+                </legend>
+                <div className="space-y-2">
                 <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                   <input
                     type="checkbox"
@@ -286,14 +288,16 @@ export function PassportPage() {
                   />
                   <span>Important Clinician Observations (Vitals / BP)</span>
                 </label>
-              </div>
+                </div>
+              </fieldset>
             </div>
 
             <div className="border-t border-slate-100 pt-4">
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="passport-validity" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Validity Duration
               </label>
               <select
+                id="passport-validity"
                 className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                 value={validityHours}
                 onChange={(e) => setValidityHours(Number(e.target.value))}
@@ -317,9 +321,16 @@ export function PassportPage() {
                   <strong>Patient Emergency Consent:</strong> Patient or designated proxy authorizes portable disclosure of minimal health data for emergency care.
                 </span>
               </label>
+              <label
+                htmlFor="passport-consent-notes"
+                className="block text-xs font-semibold text-slate-700 uppercase mt-2"
+              >
+                Consent Notes
+              </label>
               <input
+                id="passport-consent-notes"
                 type="text"
-                className="mt-2 w-full p-1.5 border border-slate-300 rounded text-xs bg-white"
+                className="w-full p-1.5 border border-slate-300 rounded text-xs bg-white"
                 placeholder="Consent notes (e.g. Verbal consent witnessed by nurse)"
                 value={consentDetails}
                 onChange={(e) => setConsentDetails(e.target.value)}
@@ -398,10 +409,11 @@ export function PassportPage() {
             </h2>
             <form onSubmit={handleVerify} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="passport-verify-token" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Enter or Scan QR Token
                 </label>
                 <input
+                  id="passport-verify-token"
                   type="text"
                   required
                   placeholder="scx-pass-..."
@@ -615,4 +627,3 @@ export function PassportPage() {
     </div>
   );
 }
-

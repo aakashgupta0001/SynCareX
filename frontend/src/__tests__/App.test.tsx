@@ -150,4 +150,78 @@ describe("offline-first workspace", () => {
     expect(await screen.findByRole("heading", { name: "Local patient-history retrieval" })).toBeTruthy();
     expect(screen.getByText(/optional; patient care workflows are not blocked/)).toBeTruthy();
   });
+
+  it("exposes accessible names for Phase 6 form controls", async () => {
+    await signInOffline();
+    await patientRepository.createLocal({
+      fullName: "Accessible Name Patient",
+      dateOfBirth: null,
+      estimatedAge: 38,
+      gender: "",
+      contactPhone: "",
+      address: "",
+      village: "Accessibility Village",
+      emergencyContactName: "",
+      emergencyContactPhone: "",
+      relevantHistory: "",
+      allergies: [],
+    });
+
+    fireEvent.click(screen.getByRole("link", { name: "AI workspace" }));
+    await screen.findByRole("heading", { name: "AI workspace" });
+    expect(await screen.findByLabelText("Local patient")).toBeTruthy();
+    expect(await screen.findByLabelText("Optional text search")).toBeTruthy();
+    expect(await screen.findByLabelText("Source text")).toBeTruthy();
+    expect(await screen.findByLabelText("Local extraction model")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("link", { name: "Follow-ups" }));
+    fireEvent.click(screen.getByRole("button", { name: /schedule follow-up/i }));
+    expect(screen.getByLabelText("Patient *")).toBeTruthy();
+    expect(screen.getByLabelText("Scheduled Date & Time *")).toBeTruthy();
+    expect(screen.getByLabelText("Reason for Follow-Up *")).toBeTruthy();
+    expect(screen.getByLabelText("Priority")).toBeTruthy();
+    expect(screen.getByLabelText("Contact Preference")).toBeTruthy();
+    expect(screen.getByLabelText("Clinical Notes")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("link", { name: "Emergency passport" }));
+    expect(screen.getByLabelText("Select Local Patient")).toBeTruthy();
+    expect(screen.getByLabelText("Validity Duration")).toBeTruthy();
+    expect(screen.getByLabelText("Consent Notes")).toBeTruthy();
+    expect(
+      screen.getByRole("group", { name: "Data Minimization: Essential Fields Only" }),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /verify & scan/i }));
+    expect(screen.getByLabelText("Enter or Scan QR Token")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("link", { name: "Referrals" }));
+    fireEvent.click(screen.getByRole("button", { name: /new referral/i }));
+    expect(screen.getByLabelText("Select Patient")).toBeTruthy();
+    expect(screen.getByLabelText("Receiving Clinic")).toBeTruthy();
+    expect(screen.getByLabelText("Priority Level")).toBeTruthy();
+    expect(screen.getByLabelText("Save as Draft")).toBeTruthy();
+    expect(screen.getByLabelText("Reason for Referral *")).toBeTruthy();
+    expect(screen.getByLabelText("Clinical Summary & Notes")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("link", { name: "Clinic exchange" }));
+    fireEvent.click(screen.getByRole("button", { name: /prepare export/i }));
+    expect(screen.getByLabelText("Select Patient *")).toBeTruthy();
+    expect(screen.getByLabelText("Target Clinic Name *")).toBeTruthy();
+    expect(screen.getByLabelText("Target Clinic ID *")).toBeTruthy();
+    expect(screen.getByLabelText("Transfer Consent & Purpose *")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: /offline lan \/ file exchange/i }));
+    expect(screen.getByLabelText("Select Package File")).toBeTruthy();
+    expect(screen.getByLabelText("Or Paste Package JSON")).toBeTruthy();
+    expect(screen.getByLabelText("Select Patient")).toBeTruthy();
+    expect(screen.getByLabelText("Target Clinic Name")).toBeTruthy();
+    expect(screen.queryByLabelText("Select patient for FHIR export")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /fhir r4 interop/i }));
+    expect(screen.getByLabelText("Select patient for FHIR export")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /paired clinics/i }));
+    fireEvent.click(screen.getByRole("button", { name: /pair new clinic/i }));
+    expect(screen.getByLabelText("Clinic Name *")).toBeTruthy();
+    expect(screen.getByLabelText("Mutual Pairing Code *")).toBeTruthy();
+  });
 });

@@ -30,9 +30,9 @@ Assessed by reading the code and running it, not from prior claims.
 | Phase | Status | Basis |
 |---|---|---|
 | 1 — UI foundation | **Implemented and tested** | 18 pages, routed and reachable; navigation, forms, loading, empty and error states exercised by unit and end-to-end tests |
-| 2 — Database and backend | **Implemented and tested** | Auth, RBAC, clinic-scoped CRUD, clinical tables, documents, audit. 124 backend tests pass. Four Alembic migrations apply to a clean database and round-trip |
+| 2 — Database and backend | **Implemented and tested** | Auth, RBAC, clinic-scoped CRUD, clinical tables, documents, audit. 144 backend tests pass. Four Alembic migrations apply to a clean database and round-trip |
 | 3 — Offline engine | **Implemented and tested** | Dexie v2+ encrypted stores, durable queue with backoff and idempotency, PWA shell, connectivity probing. Verified end to end on a persistent browser profile |
-| 4 — AI engine | **Implemented but NOT verified** | A complete local service exists: model catalog with pinned SHA-256 digests, verified atomic download, readiness detection, bearer-token auth, subprocess providers for whisper and Tesseract. **No model or runtime was available on the audit machine, so no inference of any kind was executed.** 7 infrastructure tests pass; none exercises a real model |
+| 4 — AI engine | **Implemented but NOT verified** | A complete local service exists: model catalog with pinned SHA-256 digests, verified atomic download, readiness detection, bearer-token auth, subprocess providers for whisper and Tesseract. **No model or runtime was available on the audit machine, so no inference of any kind was executed.** 14 infrastructure tests pass; none exercises a real model |
 | 5 — Synchronization | **Implemented and tested** | Push with server-side idempotency ledger, per-operation results, partial batches, conflict reporting, and a cursor-paged pull change feed. **The pull half was broken until this audit** (see §3) |
 | 6 — Continuity and integrity | **Implemented, partially tested** | Referrals, follow-ups, emergency passport, clinic transfer, FHIR bundle export, integrity guardian. 6 backend and 14 frontend tests cover them. The passport code image is not a scannable QR code (relabelled). Several UI defects found and fixed |
 
@@ -49,9 +49,9 @@ Full detail in [SECURITY_REVIEW.md](./SECURITY_REVIEW.md).
 | P2-1 | **P2** | Passport verification token persisted in clear next to its own hash | **Fixed** |
 | P2-2 | **P2** | Six modal dialogs had no Escape handler and their overlay blocked all other interaction | **Fixed** |
 | P2-3 | **P2** | Error objects logged to the browser console; those screens also failed silently | **Fixed** |
-| P2-4 | **P2** | ~48 form labels in Phase 6 pages are not associated with their controls | **Open** |
+| P2-4 | **P2** | Phase 6 form controls lacked programmatic labels | **Fixed** + regression test |
 | P3-1 | **P3** | The emergency passport "QR code" is a decorative pattern, not scannable | **Fixed** (relabelled honestly) |
-| P3-2 | **P3** | One-off developer edit scripts committed to the repository | **Open** |
+| P3-2 | **P3** | One-off developer edit scripts committed to the repository | **Fixed** (7 scripts removed) |
 | P3-3 | **P3** | Six dev-dependency advisories; **production dependencies report 0** | **Documented** |
 | P3-4 | **P3** | Intermittent ~35px horizontal page scroll at small widths | **Open**, covered by an expected-to-fail test |
 
@@ -88,16 +88,21 @@ payloads return zero rows, and logout invalidates an unexpired access token.
     768px tablet kept a fixed sidebar and a 553px content column. The
     breakpoint is now 900px, which also cut the horizontal overflow from
     260px to 35px.
+11. **Phase 6 form labels and repository hygiene fixed** — interactive
+    controls in the AI workspace, follow-up, passport, referral and transfer
+    pages now have accessible names; the passport checkbox group uses a
+    `fieldset`/`legend`, and the FHIR patient selector has a screen-reader
+    label. The seven one-off source-edit scripts were removed.
 
 ## 5. Tests executed and actual outcomes
 
 | Suite | Command | Result |
 |---|---|---|
-| Frontend unit and component | `npm test` | **45 passed** (6 files) |
-| Backend | `python -m pytest` | **138 passed** |
-| AI engine | `python -m pytest ai_engine/tests` | **7 passed** |
+| Frontend unit and component | `npm test` | **69 passed** (9 files) |
+| Backend | `python -m pytest` | **144 passed** |
+| AI engine | `python -m pytest ai_engine/tests` | **14 passed** |
 | Typecheck | `tsc -b` | clean |
-| Production build | `npm run build` | passed, 20 precache entries (734 KiB) |
+| Production build | `npm run build` | passed, 20 precache entries (747.66 KiB) |
 | Migrations | `alembic upgrade head` on a clean DB, then `alembic check` | clean, no drift |
 | Offline acceptance (browser) | `npx playwright test e2e/offline-acceptance.spec.ts` | **19 PASS, 6 BLOCKED, 0 FAIL** |
 | Two-device sync (browser) | `npx playwright test e2e/two-device-sync.spec.ts` | **8 PASS, 0 FAIL** |
@@ -108,8 +113,8 @@ payloads return zero rows, and logout invalidates an unexpired access token.
 
 **Tests added during this phase:** 16 backend security tests (including two
 parametrised sweeps over every route), 2 pull regression tests, 6 frontend
-continuity-offline tests, and 2 browser suites (offline acceptance,
-two-device sync).
+continuity-offline tests, a Phase 6 accessible-name regression test, and 2
+browser suites (offline acceptance, two-device sync).
 
 Nothing was skipped, weakened or marked passing to obtain a green result.
 Where a capability could not be exercised, it is recorded as **blocked** with
@@ -139,14 +144,15 @@ Measured, not estimated. Single-machine figures from the runs above.
 
 | Measure | Observed |
 |---|---|
-| Production build | 7–10 s; main bundle 510 KB raw / 153 KB gzipped |
-| Service worker precache | 20 entries, 734 KiB |
+| Production build | ~7.5 s; main bundle 686.47 KB raw / 195.00 KB gzipped |
+| Service worker precache | 20 entries, 747.66 KiB |
 | Cold start to interactive, offline | Under 2 s on the test machine |
 | Offline sign-in (PBKDF2, 310,000 iterations) | ~0.3–0.5 s, deliberate cost |
 | Full offline acceptance run (2 browser launches, 20 steps) | ~10 s of interaction |
 | Two-device suite (2 persistent profiles, sync cycles) | ~7 minutes wall clock, dominated by sync waits |
-| Backend suite | 124 tests in ~43 s |
-| Frontend unit suite | 45 tests in ~7 s |
+| Backend suite | 144 tests in ~48 s |
+| Frontend unit suite | 69 tests in ~11.5 s |
+| AI engine suite | 14 tests in ~2 s |
 | Browser storage quota | 10.00 GiB; persistent storage not granted by default |
 
 Pagination is bounded everywhere it matters: patient lists page at 10–20,
@@ -184,7 +190,7 @@ from it.
    is a safety copy, not a restore mechanism.
 6. Independent security review and penetration test.
 7. Clinical safety review and clinician sign-off.
-8. Close P2-4 (label association) and P3-4 (horizontal scroll).
+8. Close P3-4 (horizontal scroll).
 9. Test on browsers other than Chrome, and on a low-end device.
 
 **Not blockers for a demonstration:** all of the above are acceptable for a

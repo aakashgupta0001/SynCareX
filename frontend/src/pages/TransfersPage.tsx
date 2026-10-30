@@ -397,10 +397,11 @@ export function TransfersPage() {
             </p>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="transfer-import-file" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Select Package File
               </label>
               <input
+                id="transfer-import-file"
                 type="file"
                 accept=".json"
                 className="w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:bg-slate-100 file:font-semibold hover:file:bg-slate-200"
@@ -420,10 +421,11 @@ export function TransfersPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="transfer-import-json" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Or Paste Package JSON
               </label>
               <textarea
+                id="transfer-import-json"
                 rows={6}
                 className="w-full p-2 border border-slate-300 rounded-lg text-xs font-mono bg-slate-50"
                 placeholder='{"schemaVersion": "syncarex-continuity-v1", ...}'
@@ -451,10 +453,11 @@ export function TransfersPage() {
             </p>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="transfer-local-export-patient" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Select Patient
               </label>
               <select
+                id="transfer-local-export-patient"
                 className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                 value={exportPatientId}
                 onChange={(e) => setExportPatientId(e.target.value)}
@@ -468,10 +471,11 @@ export function TransfersPage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+              <label htmlFor="transfer-local-target-clinic" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                 Target Clinic Name
               </label>
               <input
+                id="transfer-local-target-clinic"
                 type="text"
                 className="w-full p-2 border border-slate-300 rounded-lg text-sm"
                 value={exportTargetClinicName}
@@ -545,7 +549,11 @@ export function TransfersPage() {
               </p>
             </div>
             <div className="flex gap-2">
+              <label htmlFor="transfer-fhir-patient" className="sr-only">
+                Select patient for FHIR export
+              </label>
               <select
+                id="transfer-fhir-patient"
                 className="p-2 border border-slate-300 rounded-lg text-xs bg-white"
                 value={fhirPatientId}
                 onChange={(e) => setFhirPatientId(e.target.value)}
@@ -605,10 +613,11 @@ export function TransfersPage() {
             <h2 className="text-base font-bold text-slate-900">Prepare Patient Transfer Package</h2>
             <form onSubmit={handleExportPackage} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-modal-patient" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Select Patient *
                 </label>
                 <select
+                  id="transfer-modal-patient"
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                   value={exportPatientId}
                   onChange={(e) => setExportPatientId(e.target.value)}
@@ -622,10 +631,11 @@ export function TransfersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-modal-target-clinic" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Target Clinic Name *
                 </label>
                 <input
+                  id="transfer-modal-target-clinic"
                   type="text"
                   required
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -635,10 +645,11 @@ export function TransfersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-modal-target-clinic-id" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Target Clinic ID *
                 </label>
                 <input
+                  id="transfer-modal-target-clinic-id"
                   type="text"
                   required
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -649,10 +660,11 @@ export function TransfersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-modal-consent-purpose" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Transfer Consent & Purpose *
                 </label>
                 <input
+                  id="transfer-modal-consent-purpose"
                   type="text"
                   required
                   placeholder="e.g. Authorized maternal emergency referral"
@@ -689,10 +701,11 @@ export function TransfersPage() {
             <h2 className="text-base font-bold text-slate-900">Pair With Peer Clinic</h2>
             <form onSubmit={handlePairClinic} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-pair-clinic-name" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Clinic Name *
                 </label>
                 <input
+                  id="transfer-pair-clinic-name"
                   type="text"
                   required
                   placeholder="e.g. Sub-District Hospital B"
@@ -703,10 +716,11 @@ export function TransfersPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="transfer-pair-code" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Mutual Pairing Code *
                 </label>
                 <input
+                  id="transfer-pair-code"
                   type="text"
                   required
                   placeholder="CLINIC-PAIR-XXXX"
@@ -738,4 +752,3 @@ export function TransfersPage() {
     </div>
   );
 }
-

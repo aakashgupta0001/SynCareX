@@ -86,12 +86,12 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 
 All figures produced by running the commands.
 
-- Frontend unit and component tests: **59 passed** (8 files)
-- Backend tests: **138 passed**
-- AI engine tests: **9 passed**
+- Frontend unit and component tests: **69 passed** (9 files)
+- Backend tests: **144 passed**
+- AI engine tests: **14 passed**
 - Offline acceptance in a real browser: **19 PASS, 6 BLOCKED, 0 FAIL**
 - Two-device synchronization: **8 PASS, 0 FAIL**
-- Typecheck and production build: clean, 20 precache entries (734 KiB)
+- Typecheck and production build: clean, 20 precache entries (747.66 KiB)
 - Alembic: clean upgrade on an empty database; `alembic check` reports no drift
 - `npm audit --omit=dev`: **0 vulnerabilities** in production dependencies
 
@@ -107,8 +107,8 @@ All figures produced by running the commands.
   and prove nothing about origin.
 - No authentication rate limiting, no retention policy, no deletion workflow.
 - No third-party security review or penetration test has been performed.
-- Two moderate findings remain open: error objects logged to the browser
-  console, and ~48 unassociated form labels in the Phase 6 pages.
+- No P2 findings remain open in the current review. One minor UI issue remains:
+  intermittent horizontal scrolling at small widths (P3-4).
 
 ## Known AI limitations
 

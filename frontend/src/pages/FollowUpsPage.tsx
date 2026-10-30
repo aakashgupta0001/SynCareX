@@ -381,10 +381,11 @@ export function FollowUpsPage() {
             <h2 className="text-base font-bold text-slate-900">Schedule Patient Follow-Up</h2>
             <form onSubmit={handleCreateFollowUp} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="followup-patient" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Patient *
                 </label>
                 <select
+                  id="followup-patient"
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                   value={patientId}
                   onChange={(e) => setPatientId(e.target.value)}
@@ -398,10 +399,11 @@ export function FollowUpsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="followup-scheduled-at" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Scheduled Date & Time *
                 </label>
                 <input
+                  id="followup-scheduled-at"
                   type="datetime-local"
                   required
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -411,10 +413,11 @@ export function FollowUpsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="followup-reason" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Reason for Follow-Up *
                 </label>
                 <input
+                  id="followup-reason"
                   type="text"
                   required
                   placeholder="e.g. 2-week blood pressure check & medication review"
@@ -426,10 +429,11 @@ export function FollowUpsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  <label htmlFor="followup-priority" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Priority
                   </label>
                   <select
+                    id="followup-priority"
                     className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                     value={priority}
                     onChange={(e) => setPriority(e.target.value as FollowUpPriority)}
@@ -440,10 +444,11 @@ export function FollowUpsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  <label htmlFor="followup-contact-preference" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Contact Preference
                   </label>
                   <select
+                    id="followup-contact-preference"
                     className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                     value={contactPreference}
                     onChange={(e) => setContactPreference(e.target.value)}
@@ -456,10 +461,11 @@ export function FollowUpsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="followup-notes" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Clinical Notes
                 </label>
                 <textarea
+                  id="followup-notes"
                   rows={2}
                   placeholder="Specific parameters to monitor..."
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -498,10 +504,11 @@ export function FollowUpsPage() {
             </p>
             <form onSubmit={handleReschedule} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="reschedule-scheduled-at" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   New Date & Time *
                 </label>
                 <input
+                  id="reschedule-scheduled-at"
                   type="datetime-local"
                   required
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -511,10 +518,11 @@ export function FollowUpsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="reschedule-reason" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Reason for Rescheduling *
                 </label>
                 <input
+                  id="reschedule-reason"
                   type="text"
                   required
                   placeholder="e.g. Patient traveling out of district"
@@ -554,10 +562,11 @@ export function FollowUpsPage() {
             </p>
             <form onSubmit={handleComplete} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="followup-outcome" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Clinical Outcome & Notes *
                 </label>
                 <textarea
+                  id="followup-outcome"
                   rows={3}
                   required
                   placeholder="e.g. Blood pressure within normal range (118/76). Patient adherent to medication."
@@ -589,4 +598,3 @@ export function FollowUpsPage() {
     </div>
   );
 }
-

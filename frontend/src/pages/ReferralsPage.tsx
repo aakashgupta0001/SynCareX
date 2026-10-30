@@ -312,10 +312,11 @@ export function ReferralsPage() {
             <h2 className="text-base font-bold text-slate-900">Create Patient Referral</h2>
             <form onSubmit={handleCreateReferral} className="space-y-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="referral-patient" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Select Patient
                 </label>
                 <select
+                  id="referral-patient"
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                   value={patientId}
                   onChange={(e) => setPatientId(e.target.value)}
@@ -329,10 +330,11 @@ export function ReferralsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="referral-receiving-clinic" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Receiving Clinic
                 </label>
                 <select
+                  id="referral-receiving-clinic"
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                   value={receivingClinicName}
                   onChange={(e) => {
@@ -351,10 +353,11 @@ export function ReferralsPage() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  <label htmlFor="referral-priority" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Priority Level
                   </label>
                   <select
+                    id="referral-priority"
                     className="w-full p-2 border border-slate-300 rounded-lg text-sm bg-white"
                     value={priority}
                     onChange={(e) => setPriority(e.target.value as ReferralPriority)}
@@ -365,9 +368,9 @@ export function ReferralsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  <p className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Submission Mode
-                  </label>
+                  </p>
                   <div className="flex items-center gap-2 pt-2">
                     <label className="text-xs text-slate-700 cursor-pointer flex items-center gap-1.5">
                       <input
@@ -383,10 +386,11 @@ export function ReferralsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="referral-reason" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Reason for Referral *
                 </label>
                 <input
+                  id="referral-reason"
                   type="text"
                   required
                   placeholder="e.g. Uncontrolled hypertension despite triple therapy"
@@ -397,10 +401,11 @@ export function ReferralsPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                <label htmlFor="referral-summary" className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Clinical Summary & Notes
                 </label>
                 <textarea
+                  id="referral-summary"
                   rows={3}
                   placeholder="Summarize relevant history, investigation findings, and diagnostic queries."
                   className="w-full p-2 border border-slate-300 rounded-lg text-sm"
@@ -431,4 +436,3 @@ export function ReferralsPage() {
     </div>
   );
 }
-
