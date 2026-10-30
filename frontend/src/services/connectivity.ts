@@ -120,7 +120,17 @@ export function startConnectivityMonitor(): () => void {
 
   const handleOnline = () => {
     patch({ browserOnline: true });
+    // "Connected to WiFi" does not mean the internet works yet — routers
+    // often need a few seconds, and a probe fired too early fails and then
+    // waits for the next 30-second health tick, leaving freshly queued work
+    // showing as waiting long after the link is usable. A short burst of
+    // re-probes makes the reconnect sync fire the moment it is.
     void probeApi().finally(schedule);
+    for (const delay of [3_000, 8_000, 15_000]) {
+      window.setTimeout(() => {
+        if (!isApiUsable(state)) void probeApi().finally(schedule);
+      }, delay);
+    }
   };
   const handleOffline = () => {
     patch({

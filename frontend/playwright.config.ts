@@ -52,7 +52,7 @@ export default defineConfig({
       port: PREVIEW_PORT,
       reuseExistingServer: !process.env.CI,
       timeout: 180_000,
-      env: { VITE_API_BASE_URL: API_BASE },
+      env: { VITE_API_BASE_URL: "/api/v1", VITE_API_PROXY_TARGET: `http://localhost:${API_PORT}` },
       stdout: "pipe",
       stderr: "pipe",
     },

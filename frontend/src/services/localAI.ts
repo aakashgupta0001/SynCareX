@@ -47,6 +47,31 @@ export interface ExtractionResponse {
   requires_review: true;
 }
 
+/** One retrieved history line, carrying the stable ID the summary must cite. */
+export interface SummarySourceLine {
+  id: string;
+  text: string;
+}
+
+export interface SummaryPoint {
+  text: string;
+  source_line_ids: string[];
+}
+
+export type SummarySections = {
+  presenting_complaint: SummaryPoint[];
+  relevant_history: SummaryPoint[];
+  medications: SummaryPoint[];
+  allergies: SummaryPoint[];
+  vitals: SummaryPoint[];
+  open_questions: SummaryPoint[];
+};
+
+export interface SummaryResponse extends SummarySections {
+  model_id: string;
+  requires_review: true;
+}
+
 const LOCAL_AI_URL = "http://127.0.0.1:8765";
 
 async function request<T>(
@@ -133,5 +158,27 @@ export const localAIClient = {
     body.set("source_text", text);
     body.set("model_id", modelId);
     return request("/api/v1/extractions", { method: "POST", body }, token);
+  },
+
+  /**
+   * RAG-lite structured summary: the transcript plus the top-k lexically
+   * ranked history lines, each with its stable ID. Every point in the reply
+   * cites those IDs, so nothing in the summary is untraceable.
+   */
+  summarize(
+    transcript: string,
+    history: SummarySourceLine[],
+    modelId: string,
+    token: string,
+  ): Promise<SummaryResponse> {
+    return request(
+      "/api/v1/summaries",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_id: modelId, transcript, history }),
+      },
+      token,
+    );
   },
 };

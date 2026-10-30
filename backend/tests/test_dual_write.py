@@ -319,3 +319,159 @@ def test_patients_without_hashed_terms_are_still_found_during_dual_write(api_cli
     assert both.status_code == 200, both.text
     assert both.json()["total"] == 2
     assert {item["id"] for item in both.json()["items"]} == {indexed, legacy}
+
+
+# --------------------------------------------------------------------------
+# Dual-write for the rest of the clinical entities: free-text fields (note
+# bodies, reasons, values, summary text) also travel with a clinic-key
+# envelope, stored verbatim by the server next to the plaintext.
+# --------------------------------------------------------------------------
+
+def test_a_clinical_note_travels_with_its_sealed_copy(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    consultation_id = str(uuid4())
+    note_id = str(uuid4())
+    envelope = sealed("Confidential note body")
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=hashlib.sha256(patient_id.encode()).hexdigest(),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=consultation_id,
+                idempotency_key=hashlib.sha256(consultation_id.encode()).hexdigest(),
+                entity_type="consultation",
+                payload={"patient_id": patient_id, "reason": "Follow-up"},
+            ),
+            operation(
+                entity_id=note_id,
+                idempotency_key=hashlib.sha256(note_id.encode()).hexdigest(),
+                entity_type="clinicalNote",
+                payload={
+                    "patient_id": patient_id,
+                    "consultation_id": consultation_id,
+                    "body": "Confidential note body",
+                },
+                sealed_content=envelope,
+            ),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["acknowledged"] == 3
+
+    from app.models import EntitySealedContent
+
+    db = api_client["session_factory"]()
+    try:
+        stored = (
+            db.query(EntitySealedContent)
+            .filter(
+                EntitySealedContent.entity_type == "clinicalNote",
+                EntitySealedContent.entity_id == UUID(note_id),
+            )
+            .one_or_none()
+        )
+        assert stored is not None
+        # Stored byte for byte, with no attempt to parse it, and scoped to the
+        # syncing clinic so it can never leak across the boundary.
+        assert stored.ciphertext == envelope["ciphertext"]
+        assert stored.iv == envelope["iv"]
+        assert stored.key_epoch == 1
+        assert stored.entity_version == 1
+        assert stored.clinic_id == api_client["clinic_id"]
+    finally:
+        db.close()
+
+
+def test_updating_a_note_replaces_its_sealed_copy(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    consultation_id = str(uuid4())
+    note_id = str(uuid4())
+    send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=hashlib.sha256(f"p2:{patient_id}".encode()).hexdigest(),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=consultation_id,
+                idempotency_key=hashlib.sha256(f"c2:{consultation_id}".encode()).hexdigest(),
+                entity_type="consultation",
+                payload={"patient_id": patient_id},
+            ),
+            operation(
+                entity_id=note_id,
+                idempotency_key=hashlib.sha256(f"n2:{note_id}".encode()).hexdigest(),
+                entity_type="clinicalNote",
+                payload={
+                    "patient_id": patient_id,
+                    "consultation_id": consultation_id,
+                    "body": "First draft",
+                },
+                sealed_content=sealed("First draft"),
+            ),
+        ],
+    )
+
+    replacement = sealed("Clinician-edited body")
+    edit = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=note_id,
+                idempotency_key=hashlib.sha256(f"n2-update:{note_id}".encode()).hexdigest(),
+                entity_type="clinicalNote",
+                operation_type="update",
+                base_version=1,
+                local_version=2,
+                payload={"body": "Clinician-edited body", "expected_version": 1},
+                sealed_content=replacement,
+            )
+        ],
+    )
+    assert edit.status_code == 200, edit.text
+    assert edit.json()["acknowledged"] == 1
+
+    from app.models import EntitySealedContent
+
+    db = api_client["session_factory"]()
+    try:
+        stored = (
+            db.query(EntitySealedContent)
+            .filter(
+                EntitySealedContent.entity_type == "clinicalNote",
+                EntitySealedContent.entity_id == UUID(note_id),
+            )
+            .one()
+        )
+        # The old envelope is gone: a stale ciphertext must never survive an
+        # edit as if it were current.
+        assert stored.ciphertext == replacement["ciphertext"]
+        assert stored.entity_version == 2
+        count = (
+            db.query(EntitySealedContent)
+            .filter(
+                EntitySealedContent.entity_type == "clinicalNote",
+                EntitySealedContent.entity_id == UUID(note_id),
+            )
+            .count()
+        )
+        assert count == 1
+    finally:
+        db.close()

@@ -1,7 +1,6 @@
 import type { LocalPatient } from "../database/types";
 
-const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000/api/v1";
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 let accessToken: string | null = null;
 let refreshInFlight: Promise<string | null> | null = null;
 let restoreInFlight: Promise<AuthResponse | null> | null = null;
@@ -186,6 +185,35 @@ export interface DeviceProvisionResponse {
   provisioned_at: string;
 }
 
+export interface ConflictFieldDecisionRequest {
+  field: string;
+  choice: "local" | "server";
+  local_value?: unknown;
+  server_value?: unknown;
+}
+
+export interface ConflictResolutionRequest {
+  entity_type: string;
+  entity_id: string;
+  base_version: number;
+  winning_version: number;
+  winner_source: "local" | "server" | "merged";
+  field_decisions: ConflictFieldDecisionRequest[];
+}
+
+export interface ConflictResolutionResponse {
+  id: string;
+  clinic_id: string;
+  entity_type: string;
+  entity_id: string;
+  base_version: number;
+  winning_version: number;
+  winner_source: string;
+  resolved_by: string;
+  field_decisions: ConflictFieldDecisionRequest[] | null;
+  resolved_at: string;
+}
+
 export interface DocumentResponse {
   id: string;
   patient_id: string;
@@ -199,6 +227,41 @@ export interface DocumentResponse {
   created_at: string;
 }
 
+export interface ChunkedUploadInitInput {
+  patient_id: string;
+  document_id: string | null;
+  file_name: string;
+  content_type: string;
+  byte_size: number;
+  /** SHA-256 hex of the whole file, verified again at completion. */
+  total_checksum: string;
+  chunk_size: number;
+  description?: string | null;
+}
+
+export interface ChunkedUploadInitResponse {
+  upload_id: string;
+  chunk_size: number;
+  total_chunks: number;
+}
+
+export interface ChunkedUploadStatusResponse {
+  upload_id: string;
+  chunk_size: number;
+  byte_size: number;
+  total_chunks: number;
+  received_indexes: number[];
+  missing_indexes: number[];
+}
+
+export interface ChunkedPartResponse {
+  index: number;
+  received: boolean;
+  missing_indexes: number[];
+}
+
+export type ClinicKeyWrapType = "passphrase" | "identity";
+
 export interface ClinicKeyWrapResponse {
   clinic_id: string;
   user_id: string;
@@ -207,6 +270,14 @@ export interface ClinicKeyWrapResponse {
   wrap_iv: string;
   kdf_salt: string;
   kdf_iterations: number;
+  /**
+   * How this wrap is sealed. "passphrase" (default) uses a PBKDF2-derived
+   * KEK; "identity" uses ECDH to the recipient's identity key, in which case
+   * `ephemeral_public_key` carries the sender's ephemeral public JWK and
+   * `kdf_salt` is empty.
+   */
+  wrap_type?: ClinicKeyWrapType;
+  ephemeral_public_key?: string | null;
   created_at: string;
 }
 
@@ -223,8 +294,45 @@ export interface ClinicKeyWrapInput {
   key_epoch: number;
   wrapped_key: string;
   wrap_iv: string;
-  kdf_salt: string;
-  kdf_iterations: number;
+  /** Required for passphrase wraps; identity wraps must omit it (or send ""). */
+  kdf_salt?: string;
+  /** Required for passphrase wraps; identity wraps must omit it. */
+  kdf_iterations?: number;
+  /** Defaults to "passphrase" server-side. */
+  wrap_type?: ClinicKeyWrapType;
+  /** Required for identity wraps; must be omitted/empty for passphrase wraps. */
+  ephemeral_public_key?: string;
+}
+
+export interface IdentityKeyResponse {
+  user_id: string;
+  /** JSON serialization of an ECDH P-256 public JWK. */
+  public_key: string;
+  created_at: string;
+}
+
+export interface ClinicMemberResponse {
+  id: string;
+  email: string;
+  full_name: string;
+  holds_clinic_key: boolean;
+  has_identity_key: boolean;
+}
+
+/** Returned once when staff enable the patient portal for a patient. */
+export interface PatientPortalAccountResponse {
+  patient_id: string;
+  email: string;
+  enrollment_code: string;
+  enrollment_code_expires_at: string;
+}
+
+/** Current state of a patient's portal account. 404 when none exists. */
+export interface PatientPortalAccountStatusResponse {
+  email: string;
+  enrolled: boolean;
+  is_active: boolean;
+  created_at: string;
 }
 
 interface PatientPage {
@@ -246,7 +354,12 @@ export async function checkApiHealth(): Promise<{
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
-    const response = await fetch(new URL("/health", API_BASE), {
+    // API_BASE may be relative (same-origin proxy deployments), where the
+    // two-argument URL constructor would throw.
+    const healthUrl = API_BASE.startsWith("http")
+      ? new URL("/health", API_BASE).toString()
+      : "/health";
+    const response = await fetch(healthUrl, {
       signal: controller.signal,
       credentials: "omit",
     });
@@ -461,6 +574,20 @@ export const api = {
     return apiRequest<SyncPullResponse>(`/sync/changes?${query.toString()}`);
   },
 
+  /**
+   * Publishes a clinician's conflict decision to the server: who resolved
+   * what, when, and which version won. Evidence only — the resolved record
+   * itself travels through the normal operation queue.
+   */
+  async publishConflictResolution(
+    resolution: ConflictResolutionRequest,
+  ): Promise<ConflictResolutionResponse> {
+    return apiRequest<ConflictResolutionResponse>("/sync/conflict-resolutions", {
+      method: "POST",
+      body: JSON.stringify(resolution),
+    });
+  },
+
   /** Uploads document bytes for metadata the server has already accepted. */
   async uploadDocumentContent(
     documentId: string,
@@ -474,6 +601,53 @@ export const api = {
       method: "POST",
       body: form,
     });
+  },
+
+  /** Registers a chunked upload session for a large document. */
+  async initChunkedUpload(
+    payload: ChunkedUploadInitInput,
+  ): Promise<ChunkedUploadInitResponse> {
+    return apiRequest<ChunkedUploadInitResponse>("/documents/chunks/init", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** Reports which parts of a chunked upload have already arrived. */
+  async getChunkedUploadStatus(
+    uploadId: string,
+  ): Promise<ChunkedUploadStatusResponse> {
+    return apiRequest<ChunkedUploadStatusResponse>(
+      `/documents/chunks/${uploadId}`,
+    );
+  },
+
+  /** Sends one part of a chunked upload; the checksum header is verified. */
+  async uploadDocumentChunk(
+    uploadId: string,
+    index: number,
+    bytes: ArrayBuffer,
+    checksum: string,
+  ): Promise<ChunkedPartResponse> {
+    return apiRequest<ChunkedPartResponse>(
+      `/documents/chunks/${uploadId}/${index}`,
+      {
+        method: "PUT",
+        body: bytes,
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-Chunk-Checksum": checksum,
+        },
+      },
+    );
+  },
+
+  /** Finalizes a chunked upload and returns the stored document. */
+  async completeChunkedUpload(uploadId: string): Promise<DocumentResponse> {
+    return apiRequest<DocumentResponse>(
+      `/documents/chunks/${uploadId}/complete`,
+      { method: "POST" },
+    );
   },
 
   async downloadDocumentContent(documentId: string): Promise<ArrayBuffer> {
@@ -524,6 +698,11 @@ export const api = {
     return apiRequest<ClinicKeyWrapResponse>("/keys/clinic");
   },
 
+  /** Whether the clinic has a key at all, and whether it is wrapped for this user. */
+  async getClinicKeyStatus(): Promise<ClinicKeyStatusResponse> {
+    return apiRequest<ClinicKeyStatusResponse>("/keys/clinic/status");
+  },
+
   async publishClinicKeyWraps(
     wraps: ClinicKeyWrapInput[],
   ): Promise<ClinicKeyStatusResponse> {
@@ -531,6 +710,62 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ wraps }),
     });
+  },
+
+  /** Publishes (or replaces) this account's identity public key. */
+  async publishIdentityKey(publicKeyJwk: string): Promise<void> {
+    await apiRequest<void>("/keys/identity", {
+      method: "PUT",
+      body: JSON.stringify({ public_key: publicKeyJwk }),
+    });
+  },
+
+  /** Another clinic member's published identity public key. 404 if none. */
+  async getIdentityKey(userId: string): Promise<IdentityKeyResponse> {
+    return apiRequest<IdentityKeyResponse>(
+      `/keys/identity/${encodeURIComponent(userId)}`,
+    );
+  },
+
+  /** Clinic members with their clinic-key and identity-key status. */
+  async getClinicMembers(): Promise<ClinicMemberResponse[]> {
+    return apiRequest<ClinicMemberResponse[]>("/keys/clinic/members");
+  },
+
+  /**
+   * Enables the patient portal for a patient and issues the one-time
+   * enrollment code. The code is shown exactly once, at creation.
+   */
+  async createPatientPortalAccount(
+    patientId: string,
+    email: string,
+  ): Promise<PatientPortalAccountResponse> {
+    return apiRequest<PatientPortalAccountResponse>(
+      `/patients/${encodeURIComponent(patientId)}/portal-account`,
+      {
+        method: "POST",
+        body: JSON.stringify({ email }),
+      },
+    );
+  },
+
+  /** The patient's portal account, or 404 (ApiError) when none exists. */
+  async getPatientPortalAccount(
+    patientId: string,
+  ): Promise<PatientPortalAccountStatusResponse> {
+    return apiRequest<PatientPortalAccountStatusResponse>(
+      `/patients/${encodeURIComponent(patientId)}/portal-account`,
+    );
+  },
+
+  /** Fresh one-time enrollment code when the patient lost the first one. */
+  async reissuePortalEnrollmentCode(
+    patientId: string,
+  ): Promise<PatientPortalAccountResponse> {
+    return apiRequest<PatientPortalAccountResponse>(
+      `/patients/${encodeURIComponent(patientId)}/portal-account/reissue-code`,
+      { method: "POST" },
+    );
   },
 
   async listAudit(): Promise<{

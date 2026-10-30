@@ -228,6 +228,21 @@ export function ConsultationDetailPage() {
               type="file"
             />
           </label>
+          <label className="form-field">
+            <span>Or capture one with your camera</span>
+            <input
+              accept="image/jpeg,image/png,image/webp"
+              aria-label="Capture document with camera"
+              capture="environment"
+              disabled={saving}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void attach(file);
+                event.target.value = "";
+              }}
+              type="file"
+            />
+          </label>
           {documents.length ? (
             <div className="attachment-list">
               {documents.map((document) => (

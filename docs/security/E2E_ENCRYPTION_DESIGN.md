@@ -51,23 +51,23 @@ must read each other's records. Per-record keys wrapped to every user would
 mean re-wrapping on every membership change and would not improve the threat
 model meaningfully, because any member can read everything anyway.
 
-### Known gap: wrapping for a second user
+### Wrapping for a second user: implemented with identity keypairs
 
-A device can only wrap the clinic key for a user whose key-encryption key it
-can derive, which means the user's passphrase. So the device that creates the
-key can wrap it for **itself**, and there is no way for it to wrap the key for
-a colleague who has never signed in — their KEK does not exist yet, and their
-passphrase is rightly unknown.
+A device can only wrap the clinic key with a key it can derive, which means
+the user's passphrase. So the device that creates the key could originally
+wrap it for **itself** only.
 
-The fix is per-user identity keypairs: each user publishes a public key
-(private half encrypted under their own KEK), and any holder of the clinic
-key wraps it to that public key without knowing anything secret about them.
-
-This gap **does not block dual-write**, where plaintext remains authoritative
-and encryption is additive, so a user without a wrap keeps working normally.
-It **does** block the later steps: the plaintext columns cannot be dropped
-until every clinician in a clinic can obtain the key. Treat identity keypairs
-as a prerequisite for step 4.
+The fix is per-user identity keypairs, now implemented: on sign-in each user's
+device generates an ECDH P-256 key pair, publishes the public half
+(`PUT /keys/identity`), and stores the private half encrypted under the local
+vault — it never leaves the device. A holder of the clinic key fetches a
+colleague's public key, seals the clinic key to it with an ephemeral ECDH
+key, and publishes that as an `identity`-type wrap. The colleague's device
+unwraps with its own private key on the next sign-in. No passphrase is ever
+shared, and the server only ever handles opaque ciphertext. A holder with the
+`users.manage` permission does this from the share-the-key card in Settings;
+`GET /keys/clinic/members` reports who holds the key and who has published an
+identity key.
 
 ### Rotation and revocation
 
@@ -142,13 +142,21 @@ import and search features would break silently.
 **Step 1 — key material: implemented.** `clinic_key_wraps` stores one
 wrapped CDK per user. An authenticated user may fetch only their own wrap,
 and only for their own clinic. The server never receives an unwrapped CDK.
+Wraps come in two types: `passphrase` (sealed under the recipient's KEK) and
+`identity` (sealed to the recipient's published ECDH public key), so the
+second and later devices can obtain the key without anyone knowing a
+passphrase. See "Wrapping for a second user" above.
 
-**Step 2 — dual-write: implemented for patients.** A device that holds the
-clinic key sends, alongside the plaintext payload, an AES-GCM envelope of the
-same content and the keyed hashes of its searchable trigrams. The server
-stores all three. Both encrypted fields are optional, so a device without the
-key synchronizes exactly as before — verified by a test. Plaintext remains
-authoritative, so this is reversible.
+**Step 2 — dual-write: implemented for patients and the other clinical
+entities.** A device that holds the clinic key sends, alongside the plaintext
+payload, an AES-GCM envelope of the same content — for patients plus the
+keyed hashes of their searchable trigrams. The server stores all of it:
+patients carry their envelope inline, every other entity type (consultations,
+clinical notes, observations, allergies, medications, AI summaries) stores its
+envelope verbatim in `entity_sealed_content`. Both encrypted fields are
+optional, so a device without the key synchronizes exactly as before —
+verified by tests. Plaintext remains authoritative, so this is reversible.
+Raw audio is deliberately never sent anywhere.
 
 Client key handling lives in `src/security/clinicKey.ts`: the wrapped key is
 cached on the device and unwrapped at unlock, online or offline, so

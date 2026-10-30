@@ -1,0 +1,87 @@
+# Render Blueprint for SynCareX.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repository ->
+# Apply. Render provisions the database and both services from this file.
+#
+# After the first deploy:
+# 1. Run the seed job once (Jobs tab -> syncarex-seed -> Trigger Run) to
+#    create the clinic and the first administrator. Delete the job or leave
+#    it idle afterwards.
+# 2. Set JWT_SECRET (32+ random characters) and SEED_ADMIN_PASSWORD (12+
+#    characters, for the seed run only) as secret environment variables.
+
+services:
+  - type: web
+    name: syncarex-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /health
+    plan: starter
+    disk:
+      name: syncarex-documents
+      mountPath: /var/syncarex/documents
+      sizeGB: 1
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: JWT_SECRET
+        sync: false
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: FRONTEND_ORIGINS
+        value: '["https://syncarex-frontend.onrender.com"]'
+      - key: OFFLINE_GRACE_DAYS
+        value: "7"
+      - key: MAX_DOCUMENT_BYTES
+        value: "10485760"
+      - key: SYNC_BATCH_LIMIT
+        value: "50"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: syncarex-postgres
+          property: connectionString
+
+  - type: web
+    name: syncarex-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    plan: starter
+    envVars:
+      # nginx (envsubst template) proxies /api and /health here over Render's
+      # private network, so the browser stays same-origin and the
+      # SameSite=Strict session cookie just works.
+      - key: BACKEND_ORIGIN
+        value: http://syncarex-backend:8000
+
+  # One-time administrator seeding. Trigger manually from the Jobs tab after
+  # the first deploy, with SEED_ADMIN_PASSWORD set as a secret (12+
+  # characters). Runs with APP_ENV=development because production startup
+  # refuses seeded passwords; change the password after the first sign-in.
+  - type: job
+    name: syncarex-seed
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    dockerCommand: ["python", "-m", "app.seed"]
+    envVars:
+      - key: APP_ENV
+        value: development
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: syncarex-postgres
+          property: connectionString
+
+databases:
+  - name: syncarex-postgres
+    databaseName: syncarex
+    user: syncarex
+    plan: free
+    # Free PostgreSQL expires after 30 days and is for evaluation only —
+    # switch the plan before real use.

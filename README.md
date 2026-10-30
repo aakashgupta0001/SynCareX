@@ -13,9 +13,9 @@ SynCareX is a development foundation for offline-first clinical documentation. I
 - **PWA:** Vite PWA/Workbox manifest, service-worker generation and application-shell precaching. The production build precaches local assets and does not rely on a CDN.
 - **User interface:** Login, dashboard, patient directory/create/profile/edit, consultation drafts, documents, optional AI workspace, sync center, conflict review, local integrity guardian, audit history and settings.
 - **Backend API:** Login/refresh/logout/session profile, clinic-scoped patient CRUD/search/pagination, audit listing, health and OpenAPI documentation. Access control is enforced on the API.
-- **Optional AI engine:** A separate loopback-only local service provides device readiness, verified model downloads, speech-to-text, image/PDF OCR, evidence-linked structured extraction, clinician review, local history retrieval and editable source-linked summaries. OCR supports camera capture, adaptive thresholding, and PDFs up to 10 pages with Poppler. Printed text is best supported; handwriting recognition is experimental. Inference is available only when the corresponding runtime and model are installed; none are bundled or downloaded automatically.
+- **Optional AI engine:** A separate loopback-only local service provides device readiness, verified model downloads, speech-to-text, image/PDF OCR, evidence-linked structured extraction, clinician review, local history retrieval and editable source-linked summaries, plus a locally generated structured clinical summary (RAG-lite: lexical history retrieval with cited source lines; no embeddings). OCR supports camera capture, adaptive thresholding, and PDFs up to 10 pages with Poppler. Printed text is best supported; handwriting recognition is experimental. Inference is available only when the corresponding runtime and model are installed; none are bundled or downloaded automatically.
 
-The operation queue is durable across restarts and covers patients, identifiers, consultations, clinical notes, observations, allergies, medications and documents. Push uses durable idempotency and reports per-operation outcomes; a clinic-scoped pull feed applies encrypted pages with a local checkpoint. Concurrent changes are preserved for clinician review rather than automatically merged. Document bytes are checksum-verified but transfer is whole-file, not resumable. Two-device acceptance is now verified in a real browser: two independent persistent profiles converge, and concurrent edits to the same field are preserved for clinician review (8/8 checks, `frontend/e2e/two-device-sync.spec.ts`). A PostgreSQL 16 GitHub Actions workflow applies the migrations and runs the backend suite; its first run failed before tests started because of how pytest was invoked, which is now fixed. Treat PostgreSQL as verified only once that workflow is green. Local tests still use SQLite. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), the [offline engine](./docs/offline/OFFLINE_ENGINE.md) and the [synchronization design](./docs/synchronization/SYNC_ENGINE_DESIGN.md) for precise limitations.
+The operation queue is durable across restarts and covers patients, identifiers, consultations, clinical notes, observations, allergies, medications and documents. Push uses durable idempotency and reports per-operation outcomes; a clinic-scoped pull feed applies encrypted pages with a local checkpoint. Concurrent changes are preserved for clinician review rather than automatically merged. Document bytes are checksum-verified but transfer is whole-file, not resumable. Two-device acceptance is now verified in a real browser: two independent persistent profiles converge, and concurrent edits to the same field are preserved for clinician review (8/8 checks, `frontend/e2e/two-device-sync.spec.ts`). A PostgreSQL 17 GitHub Actions workflow (matching the Compose service) applies the migrations and runs the backend suite, including a test that pushes the same record from two threads; its first run failed before tests started because of how pytest was invoked, which is now fixed. Treat PostgreSQL as verified only once that workflow is green. Local tests still use SQLite. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), the [offline engine](./docs/offline/OFFLINE_ENGINE.md) and the [synchronization design](./docs/synchronization/SYNC_ENGINE_DESIGN.md) for precise limitations.
 
 The local integrity guardian performs explicit on-device scans for conservative
 duplicate patient candidates (normalized names, limited Devanagari
@@ -101,6 +101,23 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 API health: `http://127.0.0.1:8000/health`
 OpenAPI UI: `http://127.0.0.1:8000/api/v1/docs`
+
+### 1b. Seed the pilot accounts (once)
+
+From `backend/`:
+
+```powershell
+python scripts/seed_admin.py
+```
+
+Creates the three personas' accounts in the configured database: the
+**Administrator** staff role (everything, including users.manage), the
+**Doctor** staff role (full clinical access, no user management), and the
+requested admin user `aakashgupta76342@gmail.com` (password as supplied when
+this script was written — see the script header; change it before any real
+deployment). Patients are deliberately NOT a staff role: they use the patient
+portal (`/portal`), where a staff member creates a portal account from the
+patient profile and the patient enrolls with the one-time code.
 
 ### 2. Start the frontend
 

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../database/db";
 import {
   allergyRepository,
+  consultationRepository,
+  clinicalNoteRepository,
   medicationRepository,
   observationRepository,
 } from "../repositories/consultationRepository";
@@ -11,6 +13,10 @@ import { conflictRepository } from "../repositories/conflictRepository";
 import { documentRepository } from "../repositories/documentRepository";
 import { syncNow } from "../services/syncEngine";
 import { resetConnectivityForTests } from "../services/connectivity";
+import {
+  forgetClinicKey,
+  unlockClinicKey,
+} from "../security/clinicKey";
 import {
   makeFile,
   resetWorkspace,
@@ -35,6 +41,8 @@ class FakeServer {
     entity_type: string;
     operation_type: string;
     payload: Record<string, unknown>;
+    sealed_content?: { ciphertext: string; iv: string; key_epoch: number };
+    search_terms?: string[];
   }[] = [];
   /** Forces a conflict for this entity, as if another device had edited it. */
   conflictFor: string | null = null;
@@ -58,7 +66,7 @@ class FakeServer {
       });
     }
     if (url.includes("/sync/changes?")) {
-      const requestUrl = new URL(url);
+      const requestUrl = new URL(url, "http://localhost");
       const cursor = Number(requestUrl.searchParams.get("cursor") ?? 0);
       const limit = Number(requestUrl.searchParams.get("limit") ?? 200);
       const changes = this.changes.filter(
@@ -80,13 +88,17 @@ class FakeServer {
           entity_id: string;
           operation_type: string;
           payload: Record<string, unknown>;
+          sealed_content?: { ciphertext: string; iv: string; key_epoch: number };
+          search_terms?: string[];
         }[];
       };
       this.receivedOperations.push(
-        ...body.operations.map(({ entity_type, operation_type, payload }) => ({
+        ...body.operations.map(({ entity_type, operation_type, payload, sealed_content, search_terms }) => ({
           entity_type,
           operation_type,
           payload,
+          sealed_content,
+          search_terms,
         })),
       );
       const results = body.operations.map((operation) => {
@@ -551,5 +563,146 @@ describe("conflicts and documents", () => {
     // The original bytes are still on the device after the upload.
     const blob = await documentRepository.openLocal(document.id);
     expect(await blob!.text()).toContain("synthetic test document");
+  });
+});
+
+/**
+ * Seeds a wrapped clinic key on this device and unlocks it, the way a device
+ * that already holds the clinic key looks after sign-in.
+ */
+async function unlockSeededClinicKey(): Promise<void> {
+  const passphrase = "sync-engine-test-passphrase";
+  const raw = crypto.getRandomValues(new Uint8Array(32));
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(passphrase),
+    "PBKDF2",
+    false,
+    ["deriveKey"],
+  );
+  const kek = await crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 310_000, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  const wrapped = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, kek, raw);
+  await db.clinicKeys.put({
+    id: "current",
+    clinicId: "clinic-1",
+    keyEpoch: 1,
+    wrappedKey: btoa(String.fromCharCode(...new Uint8Array(wrapped))),
+    wrapIv: btoa(String.fromCharCode(...iv)),
+    kdfSalt: btoa(String.fromCharCode(...salt)),
+    kdfIterations: 310_000,
+    cachedAt: new Date().toISOString(),
+  });
+  const unlocked = await unlockClinicKey(passphrase, {
+    online: false,
+    clinicId: "clinic-1",
+    userId: testUser.id,
+  });
+  expect(unlocked.available).toBe(true);
+}
+
+describe("dual-write sealing for clinical entities", () => {
+  it("sends a clinic-key envelope alongside clinical free-text when the key is loaded", async () => {
+    await unlockSeededClinicKey();
+    const patient = await patientRepository.createLocal(syntheticPatient);
+    const consultation = await consultationRepository.createLocal({
+      patientId: patient.id,
+      reason: "Persistent cough",
+    });
+    await clinicalNoteRepository.createLocal({
+      patientId: patient.id,
+      consultationId: consultation.id,
+      body: "Confidential note body",
+    });
+
+    const outcome = await syncNow(testUser.id);
+    expect(outcome.failed).toBe(0);
+
+    const note = server.receivedOperations.find(
+      (operation) => operation.entity_type === "clinicalNote",
+    );
+    // The sealed copy rides along...
+    expect(note?.sealed_content).toMatchObject({ key_epoch: 1 });
+    expect(note?.sealed_content?.ciphertext).toBeTruthy();
+    // ...while dual-write keeps the plaintext flowing too: dropping either
+    // half would break the rollback path or the current readers.
+    expect(note?.payload.body).toBe("Confidential note body");
+    const sentConsultation = server.receivedOperations.find(
+      (operation) => operation.entity_type === "consultation",
+    );
+    expect(sentConsultation?.sealed_content).toBeDefined();
+    const sentPatient = server.receivedOperations.find(
+      (operation) => operation.entity_type === "patient",
+    );
+    expect(sentPatient?.sealed_content).toBeDefined();
+  });
+
+  it("still synchronizes without a sealed copy when no clinic key is loaded", async () => {
+    await forgetClinicKey();
+    const patient = await patientRepository.createLocal(syntheticPatient);
+    const consultation = await consultationRepository.createLocal({
+      patientId: patient.id,
+      reason: "Persistent cough",
+    });
+    await clinicalNoteRepository.createLocal({
+      patientId: patient.id,
+      consultationId: consultation.id,
+      body: "Plaintext-only note",
+    });
+
+    const outcome = await syncNow(testUser.id);
+    expect(outcome.failed).toBe(0);
+
+    for (const entityType of ["patient", "consultation", "clinicalNote"]) {
+      const sent = server.receivedOperations.find(
+        (operation) => operation.entity_type === entityType,
+      );
+      expect(sent?.sealed_content).toBeUndefined();
+    }
+  });
+
+  it("backfills keyed search terms for a patient created before the key arrived", async () => {
+    // The patient is created while the device holds no clinic key, the way a
+    // non-admin device (or a pre-key record) has no index rows on the server.
+    await patientRepository.createLocal({
+      ...syntheticPatient,
+      fullName: "Prekey Backfill Patient",
+    });
+    await syncNow(testUser.id);
+    expect(
+      server.receivedOperations.find(
+        (operation) =>
+          operation.entity_type === "patient" &&
+          operation.operation_type === "create",
+      )?.search_terms,
+    ).toBeFalsy();
+
+    // The key arrives; the backfill queues one content-identical update.
+    await unlockSeededClinicKey();
+    expect(await patientRepository.enqueueSearchTermBackfill()).toBe(1);
+    const outcome = await syncNow(testUser.id);
+    expect(outcome.failed).toBe(0);
+
+    const backfill = server.receivedOperations.find(
+      (operation) =>
+        operation.entity_type === "patient" &&
+        operation.operation_type === "update",
+    );
+    expect(backfill).toBeDefined();
+    // The full keyed term set rides along with the sealed copy, so server
+    // search can now match this record without the plaintext query.
+    expect(backfill?.search_terms?.length).toBeGreaterThan(0);
+    expect(backfill?.sealed_content).toMatchObject({ key_epoch: 1 });
+    expect(backfill?.payload.full_name).toBe("Prekey Backfill Patient");
+
+    // Running it again is a no-op: one backfill per account, ever.
+    expect(await patientRepository.enqueueSearchTermBackfill()).toBe(0);
   });
 });

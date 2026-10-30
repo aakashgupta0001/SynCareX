@@ -101,6 +101,53 @@ export const patientRepository = {
     return (await this.listLocal({ ...options, page: 1, pageSize: 100_000 })).items;
   },
 
+  /**
+   * Re-sends every locally stored patient once, so the server gains keyed
+   * hash rows for records that were synchronized before this device had the
+   * clinic key (or by a device that never had one). Until those rows exist,
+   * keyed-only search on the server silently misses them — the plaintext
+   * union covers them during dual-write, but the index must eventually stand
+   * on its own. Runs once per account: the durable queue retries anything
+   * that fails, and the dedupe keys make a re-run a no-op.
+   */
+  async enqueueSearchTermBackfill(): Promise<number> {
+    const identity = requireUnlockedIdentity("backfill patient search terms");
+    const settingsKey = `search-terms-backfilled:${identity.userId}`;
+    if (await db.localSettings.get(settingsKey)) return 0;
+    const all = await this.listAllLocal();
+    for (const current of all) {
+      // A content-identical update: nothing clinical changes, but syncing it
+      // makes the server store this record's keyed terms. The server bumps
+      // its copy and the change feed delivers the new version on the next
+      // pull.
+      const patient: LocalPatient = { ...current };
+      const plan = await planWrite({
+        entity: patient,
+        entityType: "patient",
+        operationType: "update",
+        baseVersion: current.version,
+        payload: { ...current, expected_version: current.version },
+        baseSnapshot: current,
+        meta: { archivedAt: patient.archivedAt ?? null },
+        identity,
+      });
+      plan.record.createdAt = current.createdAt;
+      await commitWrite(db.patients, plan);
+    }
+    await db.localSettings.put({
+      key: settingsKey,
+      value: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    await auditRepository.record({
+      action: "patient.searchTerms.backfill",
+      entityType: "patient",
+      entityId: null,
+      details: { queued: String(all.length) },
+    });
+    return all.length;
+  },
+
   async searchLocal(
     query: string,
     options: PatientListOptions = {},

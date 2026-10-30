@@ -13,6 +13,39 @@ from .catalog import MODELS, ModelSpec
 
 def memory_mb() -> tuple[int, int]:
     if sys.platform == "win32":
+        # GetPerformanceInfo's PhysicalAvailable is Task Manager's
+        # "Available" memory: it includes the standby list, which Windows
+        # reclaims instantly on allocation. GlobalMemoryStatusEx's
+        # avail_phys excludes it, so on a machine that has merely cached a
+        # lot of files the strict number false-negatives the RAM guard and
+        # blocks models that would run fine.
+        class PerformanceInfo(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.c_ulong),
+                ("commit_limit", ctypes.c_size_t),
+                ("commit_total", ctypes.c_size_t),
+                ("commit_peak", ctypes.c_size_t),
+                ("physical_total", ctypes.c_size_t),
+                ("physical_available", ctypes.c_size_t),
+                ("system_cache", ctypes.c_size_t),
+                ("kernel_total", ctypes.c_size_t),
+                ("kernel_paged", ctypes.c_size_t),
+                ("kernel_nonpaged", ctypes.c_size_t),
+                ("page_size", ctypes.c_size_t),
+                ("handle_count", ctypes.c_ulong),
+                ("process_count", ctypes.c_ulong),
+                ("thread_count", ctypes.c_ulong),
+            ]
+
+        info = PerformanceInfo()
+        info.cb = ctypes.sizeof(PerformanceInfo)
+        if ctypes.windll.psapi.GetPerformanceInfo(ctypes.byref(info), info.cb):
+            page_size = info.page_size or 4096
+            return (
+                info.physical_total * page_size // (1024 * 1024),
+                info.physical_available * page_size // (1024 * 1024),
+            )
+
         class MemoryStatus(ctypes.Structure):
             _fields_ = [
                 ("length", ctypes.c_ulong),

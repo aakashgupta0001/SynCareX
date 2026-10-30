@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,6 +78,40 @@ class ClinicalNoteRead(BaseModel):
     author_id: UUID
     note_type: str
     body: str
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AISummaryCreate(BaseModel):
+    """A clinician-edited AI summary entering the sync pipeline.
+
+    Raw audio and unreviewed artifacts deliberately have no entity type: they
+    stay on the device, for bandwidth and for privacy.
+    """
+
+    id: UUID | None = None
+    patient_id: UUID
+    text: str = Field(min_length=1, max_length=20000)
+    source_artifact_id: str | None = Field(default=None, max_length=100)
+    sections: list[dict[str, Any]] = Field(default_factory=list, max_length=6)
+
+
+class AISummaryUpdate(BaseModel):
+    expected_version: int | None = Field(default=None, ge=1)
+    text: str = Field(min_length=1, max_length=20000)
+
+
+class AISummaryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    patient_id: UUID
+    author_id: UUID
+    source_artifact_id: str | None
+    sections: list[dict[str, Any]] | None
+    clinician_edited: bool
+    text: str
     version: int
     created_at: datetime
     updated_at: datetime
@@ -235,3 +269,40 @@ class ClinicalNotePage(BaseModel):
 class DocumentPage(BaseModel):
     items: list[DocumentRead]
     total: int
+
+
+class ChunkedUploadInit(BaseModel):
+    """Registers a chunked upload session for a file the device is sending
+    in parts. ``document_id`` targets metadata already registered through
+    sync; when omitted the server mints the DocumentRecord at completion."""
+
+    patient_id: UUID
+    document_id: UUID | None = None
+    consultation_id: UUID | None = None
+    file_name: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(min_length=1, max_length=100)
+    byte_size: int = Field(gt=0)
+    total_checksum: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    chunk_size: int = Field(gt=0)
+    description: str | None = Field(default=None, max_length=500)
+
+
+class ChunkedUploadInitRead(BaseModel):
+    upload_id: UUID
+    chunk_size: int
+    total_chunks: int
+
+
+class ChunkedPartRead(BaseModel):
+    index: int
+    received: bool
+    missing_indexes: list[int]
+
+
+class ChunkedUploadStatusRead(BaseModel):
+    upload_id: UUID
+    chunk_size: int
+    byte_size: int
+    total_chunks: int
+    received_indexes: list[int]
+    missing_indexes: list[int]

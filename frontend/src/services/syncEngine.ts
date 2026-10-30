@@ -20,11 +20,11 @@ import { patientRepository } from "../repositories/patientRepository";
 import { auditRepository } from "../repositories/auditRepository";
 import { syncPullRepository } from "../repositories/syncPullRepository";
 import { getLocalDeviceId, markDeviceAuthorized, recordServerContact } from "../offline/device";
+import { uploadDocumentBytes } from "./chunkedUpload";
 import { decryptLocalValue, isVaultUnlocked } from "../security/localVault";
 import { sealForServer, serverIndexTerms } from "../security/clinicKey";
 import { patientTrigrams } from "../offline/searchIndex";
-import type { LocalPatient } from "../database/types";
-import type { SyncOperation } from "../database/types";
+import type { EntityType, LocalPatient, SyncOperation } from "../database/types";
 
 export const SYNC_BATCH_SIZE = 25;
 
@@ -51,15 +51,32 @@ export type ProgressHandler = (progress: SyncProgress) => void;
 let inFlight: Promise<SyncOutcome> | null = null;
 
 /**
+ * Entities whose content is sealed with the clinic key on the way out.
+ * Patients additionally send keyed search hashes; the rest are free-text
+ * clinical fields (reasons, note bodies, values, summary text) that travel as
+ * plaintext otherwise. Both are omitted when no clinic key is loaded, which
+ * keeps a device without one working exactly as before.
+ */
+const SEALED_ENTITY_TYPES = new Set<EntityType>([
+  "patient",
+  "consultation",
+  "clinicalNote",
+  "observation",
+  "allergy",
+  "medication",
+  "aiSummary",
+]);
+
+/**
  * Converts a queued operation into the wire format. Payloads are decrypted
  * only here, in memory, immediately before the request.
  */
 async function toRequest(operation: SyncOperation): Promise<SyncOperationRequest> {
   const payload = await decryptLocalValue<Record<string, unknown>>(operation.payload);
-  // Dual-write. Both are omitted when no clinic key is loaded, which keeps a
-  // device without one working exactly as before.
-  const sealed =
-    operation.entityType === "patient" ? await sealForServer(payload) : null;
+  // Dual-write.
+  const sealed = SEALED_ENTITY_TYPES.has(operation.entityType)
+    ? await sealForServer(payload)
+    : null;
   const terms =
     operation.entityType === "patient" && sealed
       ? await serverIndexTerms(patientTrigrams(payload as unknown as LocalPatient))
@@ -300,12 +317,28 @@ async function uploadAcknowledgedDocuments(
         );
         continue;
       }
-      await api.uploadDocumentContent(
-        documentId,
-        metadata.fileName,
-        metadata.mimeType,
+      // Large files travel in checksummed parts that resume from wherever
+      // the transfer was cut; the session id is persisted on this document
+      // so even an app restart resumes instead of restarting from byte zero.
+      const result = await uploadDocumentBytes(
+        {
+          documentId,
+          patientId: metadata.patientId,
+          fileName: metadata.fileName,
+          mimeType: metadata.mimeType,
+          checksum: metadata.checksum,
+          description: metadata.description || undefined,
+        },
         bytes,
+        {
+          uploadId: metadata.uploadId ?? null,
+          onUploadId: (uploadId) =>
+            documentRepository.setUploadId(documentId, uploadId),
+        },
       );
+      if (result.chunked) {
+        await documentRepository.setUploadId(documentId, null);
+      }
       // The local original is kept; only the status changes.
       await documentRepository.setUploadStatus(documentId, "uploaded");
       uploaded += 1;
@@ -459,6 +492,9 @@ async function runSync(
     const pulled = await pullChanges(ownerId, deviceId);
     const uploaded = await uploadQueuedDocuments(ownerId, onProgress);
     const downloaded = await downloadMissingDocumentContent();
+    // Conflict resolutions queued while offline are published now that the
+    // API answered; a failure keeps them queued for the next contact.
+    await conflictRepository.drainPendingResolutions().catch(() => undefined);
     await recordSuccessfulSync();
     return {
       ...idle,
@@ -547,6 +583,9 @@ async function runSync(
   }
 
   const documentsUploaded = await uploadQueuedDocuments(ownerId, onProgress);
+  // Publish conflict resolutions queued while the device was offline; a
+  // failure leaves them queued for the next synchronization contact.
+  await conflictRepository.drainPendingResolutions().catch(() => undefined);
   // A failure while pulling must not discard or misreport the push that
   // already succeeded: the clinician's save is complete either way.
   let pullError: string | null = null;

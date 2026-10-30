@@ -5,9 +5,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Clinic, Patient
+from app.models import Clinic, Patient
 from app.repositories.patients import PatientRepository
 from app.schemas.patients import PatientCreate, PatientUpdate
+from app.services.audit_chain import append_audit_entry
 
 
 class PatientService:
@@ -29,14 +30,13 @@ class PatientService:
                 return existing
 
         patient = self.repository.create(clinic_id, actor_id, data)
-        self.db.add(
-            AuditLog(
-                clinic_id=clinic_id,
-                actor_id=actor_id,
-                action="patient.create",
-                entity_type="patient",
-                entity_id=patient.id,
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=clinic_id,
+            actor_id=actor_id,
+            action="patient.create",
+            entity_type="patient",
+            entity_id=patient.id,
         )
         try:
             self.db.commit()
@@ -100,15 +100,14 @@ class PatientService:
         updated = self.repository.update(patient, data)
         changed_fields = data.model_fields_set - {"expected_version"}
         if changed_fields:
-            self.db.add(
-                AuditLog(
-                    clinic_id=clinic_id,
-                    actor_id=actor_id,
-                    action="patient.update",
-                    entity_type="patient",
-                    entity_id=patient.id,
-                    details={"changed_fields": ",".join(sorted(changed_fields))},
-                )
+            append_audit_entry(
+                self.db,
+                clinic_id=clinic_id,
+                actor_id=actor_id,
+                action="patient.update",
+                entity_type="patient",
+                entity_id=patient.id,
+                details={"changed_fields": ",".join(sorted(changed_fields))},
             )
         self.db.commit()
         self.db.refresh(updated)

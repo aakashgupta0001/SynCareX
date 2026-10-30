@@ -16,6 +16,7 @@ EntityType = Literal[
     "referral",
     "followup",
     "passport",
+    "aiSummary",
 ]
 OperationType = Literal["create", "update", "archive", "upload"]
 
@@ -114,3 +115,40 @@ class DeviceProvisionResponse(BaseModel):
     status: str
     offline_grace_days: int
     provisioned_at: datetime
+
+
+class ConflictFieldDecision(BaseModel):
+    """One field of a conflicted record and the side the clinician kept."""
+
+    field: str = Field(min_length=1, max_length=120)
+    choice: Literal["local", "server"]
+    local_value: Any = None
+    server_value: Any = None
+
+
+class ConflictResolutionCreate(BaseModel):
+    """The device's record of a clinician's conflict decision."""
+
+    entity_type: EntityType
+    entity_id: UUID
+    base_version: int = Field(ge=0)
+    winning_version: int = Field(ge=0)
+    winner_source: Literal["local", "server", "merged"]
+    field_decisions: list[ConflictFieldDecision] = Field(
+        default_factory=list, max_length=200
+    )
+
+
+class ConflictResolutionRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clinic_id: UUID
+    entity_type: str
+    entity_id: UUID
+    base_version: int
+    winning_version: int
+    winner_source: str
+    resolved_by: UUID
+    field_decisions: list[Any] | None = None
+    resolved_at: datetime

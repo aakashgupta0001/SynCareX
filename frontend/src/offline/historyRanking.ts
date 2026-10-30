@@ -22,6 +22,30 @@ export interface RankedHistory {
   truncated: boolean;
 }
 
+export interface RankedEntries<T> {
+  /** Selected entries, returned in their original (chronological) order. */
+  entries: T[];
+  matched: number;
+  truncated: boolean;
+}
+
+/**
+ * Same ranking, but for entries that carry more than their text (such as the
+ * stable record IDs the structured summary cites). `textOf` supplies the
+ * string that gets scored.
+ */
+export function rankHistoryEntries<T>(
+  entries: T[],
+  textOf: (entry: T) => string,
+  query: string,
+  budget: number,
+): RankedEntries<T> {
+  const ranked = rankHistoryLines(entries.map(textOf), query, budget);
+  const selectedTexts = new Set(ranked.lines);
+  const chosen = entries.filter((entry) => selectedTexts.has(textOf(entry)));
+  return { entries: chosen, matched: ranked.matched, truncated: ranked.truncated };
+}
+
 export function tokenizeQuery(query: string): string[] {
   return query
     .normalize("NFKC")

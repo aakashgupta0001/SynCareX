@@ -352,41 +352,100 @@ def test_translation_is_declared_as_english_only(settings: Settings) -> None:
     ).translated_to is None
 
 
-def test_llama_cli_produces_schema_constrained_extraction(
+def test_llama_server_request_carries_the_json_schema(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_engine.app.providers import _extract_with_llama_cli
+    """The grammar travels in the request body: the server applies the chat
+    template itself and constrains only the generated text, which is the
+    combination the CLI can no longer do safely."""
+    import urllib.error
 
-    def run(command, **kwargs):
-        assert command[command.index("--json-schema-file") + 1].endswith("schema.json")
-        schema = json.loads(
-            Path(command[command.index("--json-schema-file") + 1]).read_text(
-                encoding="utf-8"
+    from ai_engine.app.providers import _llama_server_completion
+
+    requests: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, body: bytes, status: int = 200) -> None:
+            self.body = body
+            self.status = status
+
+        def read(self) -> bytes:
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+    def fake_urlopen(request, timeout=None):
+        url = request if isinstance(request, str) else request.full_url
+        if url.endswith("/health"):
+            return FakeResponse(b'{"status":"ok"}')
+        if url.endswith("/v1/chat/completions"):
+            requests.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(
+                json.dumps(
+                    {
+                        "choices": [
+                            {"message": {"content": '{"facts": []}'}}
+                        ]
+                    }
+                ).encode("utf-8")
             )
-        )
-        assert schema["required"] == ["facts"]
-        assert command[command.index("--no-display-prompt"):] == [
-            "--no-display-prompt",
-            "--single-turn",
-            "--simple-io",
-            "--color",
-            "off",
-        ]
-        assert "source text" in command[command.index("-p") + 1]
-        assert kwargs["timeout"] == 600
-        return SimpleNamespace(
-            stdout='{"facts":[]}',
-            stderr="",
-        )
+        raise urllib.error.URLError(url)
 
-    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
-    content = _extract_with_llama_cli(
-        "llama-cli.exe",
-        settings.model_dir / "model.gguf",
-        "Synthetic source text",
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    class FakeProcess:
+        def poll(self):
+            return None  # still running
+
+        def terminate(self):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        "ai_engine.app.providers._llama_server_binary",
+        lambda cli: Path("llama-server.exe"),
     )
-    assert content == '{"facts":[]}'
+    monkeypatch.setattr(
+        "ai_engine.app.providers.subprocess.Popen", lambda *a, **k: FakeProcess()
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers._LLAMA_SERVER_STARTUP_SECONDS", 1
+    )
+
+    content = _llama_server_completion(
+        "llama-cli.exe",
+        Path("model.gguf"),
+        "system prompt",
+        "user prompt",
+        {"type": "object"},
+    )
+
+    assert content == '{"facts": []}'
+    body = requests[0]
+    assert body["messages"][0] == {"role": "system", "content": "system prompt"}
+    assert body["messages"][1] == {"role": "user", "content": "user prompt"}
+    assert body["temperature"] == 0
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["strict"] is True
+    assert body["response_format"]["json_schema"]["schema"] == {"type": "object"}
+
+
+def test_llama_server_missing_binary_is_a_clear_error(settings: Settings) -> None:
+    from ai_engine.app.providers import ProviderUnavailable, _llama_server_binary
+
+    with pytest.raises(ProviderUnavailable) as error:
+        _llama_server_binary("nowhere/llama-cli.exe")
+    assert "llama-server" in str(error.value)
 
 
 def test_llama_cli_output_parser_skips_runtime_diagnostics() -> None:
@@ -444,7 +503,7 @@ def test_extraction_dispatches_to_cli_and_validates_evidence(
         lambda _: {"llama": "llama-cli.exe"},
     )
     monkeypatch.setattr(
-        "ai_engine.app.providers._extract_with_llama_cli",
+        "ai_engine.app.providers._extract_via_llama_server",
         lambda *_: expected,
     )
 
@@ -512,3 +571,192 @@ def test_webm_transcription_converts_audio_before_whisper(
     assert commands[0][commands[0].index("-ar") + 1] == "16000"
     assert commands[1][commands[1].index("-f") + 1].endswith("converted.wav")
     assert "-tr" in commands[1]
+
+
+# --------------------------------------------------------------------------
+# Structured clinical summary (/api/v1/summaries)
+# --------------------------------------------------------------------------
+
+def _summary_cli_output() -> str:
+    return json.dumps(
+        {
+            "presenting_complaint": [
+                {"text": "Fever for two days.", "source_line_ids": ["transcript"]}
+            ],
+            "relevant_history": [
+                {"text": "Known asthma.", "source_line_ids": ["note:abc", "note:ghost"]}
+            ],
+            "medications": [],
+            "allergies": [
+                {"text": "Penicillin rash.", "source_line_ids": ["allergy:xyz"]}
+            ],
+            "vitals": [],
+            "open_questions": [],
+        }
+    )
+
+
+def _mock_summary_cli(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    from ai_engine.app.catalog import MODEL_BY_ID
+
+    monkeypatch.setattr(
+        "ai_engine.app.providers.importlib.util.find_spec", lambda _: None
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers._require_model",
+        lambda *_: (MODEL_BY_ID["qwen-0.5b-q4"], Path("model.gguf")),
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {"llama": "llama-cli.exe"},
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers._summarize_via_llama_server", lambda *_: output
+    )
+
+
+def test_summary_dispatches_to_cli_and_keeps_only_grounded_citations(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.models import SummarySourceLine
+    from ai_engine.app.providers import summarize
+
+    _mock_summary_cli(monkeypatch, _summary_cli_output())
+
+    result = summarize(
+        settings,
+        "qwen-0.5b-q4",
+        "Patient reports fever for two days.",
+        [
+            SummarySourceLine(id="note:abc", text="Asthma since childhood."),
+            SummarySourceLine(id="allergy:xyz", text="Penicillin rash."),
+        ],
+    )
+
+    # A citation to a history line that was never sent ("note:ghost") is a
+    # fabrication. The point survives on its grounded citation alone.
+    assert result.requires_review is True
+    assert result.model_id == "qwen-0.5b-q4"
+    assert result.presenting_complaint[0].source_line_ids == ["transcript"]
+    assert result.relevant_history[0].source_line_ids == ["note:abc"]
+    assert result.allergies[0].text == "Penicillin rash."
+    assert result.medications == []
+    assert result.vitals == []
+    assert result.open_questions == []
+
+
+def test_summary_drops_points_with_no_grounded_citation(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.models import SummarySourceLine
+    from ai_engine.app.providers import summarize
+
+    fabricated = json.dumps(
+        {
+            "presenting_complaint": [
+                {"text": "Invented diagnosis.", "source_line_ids": ["transcript"]},
+                {"text": "Pure fabrication.", "source_line_ids": ["hallucinated:id"]},
+            ]
+        }
+    )
+    _mock_summary_cli(monkeypatch, fabricated)
+
+    result = summarize(
+        settings,
+        "qwen-0.5b-q4",
+        "Patient reports fever.",
+        [SummarySourceLine(id="note:abc", text="Asthma.")],
+    )
+
+    assert [point.text for point in result.presenting_complaint] == [
+        "Invented diagnosis."
+    ]
+
+
+def test_summary_rejects_invalid_model_output(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.models import SummarySourceLine
+    from ai_engine.app.providers import ProviderUnavailable, summarize
+
+    _mock_summary_cli(monkeypatch, "not json at all")
+
+    with pytest.raises(ProviderUnavailable):
+        summarize(
+            settings,
+            "qwen-0.5b-q4",
+            "Patient reports fever.",
+            [SummarySourceLine(id="note:abc", text="Asthma.")],
+        )
+
+
+def test_summary_refuses_an_empty_transcript(settings: Settings) -> None:
+    from ai_engine.app.providers import summarize
+
+    with pytest.raises(ValueError):
+        summarize(settings, "qwen-0.5b-q4", "   ", [])
+
+
+def test_summaries_endpoint_requires_and_accepts_the_local_token(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.main import create_app
+
+    seen: dict = {}
+
+    def fake_summarize(_settings, model_id, transcript, history):
+        seen["model_id"] = model_id
+        seen["transcript"] = transcript
+        seen["history"] = history
+        return json.loads('{"presenting_complaint": [], "relevant_history": [], "medications": [], "allergies": [], "vitals": [], "open_questions": [], "model_id": "qwen-0.5b-q4", "requires_review": true}')
+
+    monkeypatch.setattr("ai_engine.app.main.summarize", fake_summarize)
+    client = TestClient(create_app(settings))
+
+    refused = client.post(
+        "/api/v1/summaries",
+        json={"model_id": "qwen-0.5b-q4", "transcript": "Fever.", "history": []},
+    )
+    assert refused.status_code == 401
+
+    ok = client.post(
+        "/api/v1/summaries",
+        json={
+            "model_id": "qwen-0.5b-q4",
+            "transcript": "Fever for two days.",
+            "history": [{"id": "note:abc", "text": "Asthma."}],
+        },
+        headers={"Authorization": "Bearer test-local-token"},
+    )
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    for section in (
+        "presenting_complaint",
+        "relevant_history",
+        "medications",
+        "allergies",
+        "vitals",
+        "open_questions",
+    ):
+        assert section in body
+    assert body["requires_review"] is True
+    assert seen["transcript"] == "Fever for two days."
+    assert seen["history"][0].id == "note:abc"
+
+
+def test_summaries_endpoint_rejects_an_empty_transcript(
+    settings: Settings,
+) -> None:
+    from ai_engine.app.main import create_app
+
+    client = TestClient(create_app(settings))
+    refused = client.post(
+        "/api/v1/summaries",
+        json={"model_id": "qwen-0.5b-q4", "transcript": "   ", "history": []},
+        headers={"Authorization": "Bearer test-local-token"},
+    )
+    assert refused.status_code == 422

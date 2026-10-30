@@ -48,6 +48,7 @@ export const documentRepository = {
       uploadStatus: "queued",
       uploadError: null,
       uploadedAt: null,
+      uploadId: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -222,6 +223,25 @@ export const documentRepository = {
       uploadStatus,
       uploadError,
       uploadedAt: uploadStatus === "uploaded" ? new Date().toISOString() : current.uploadedAt,
+      updatedAt: new Date().toISOString(),
+    };
+    const encrypted = await encryptLocalValue(updated);
+    const record = await db.documents.get(id);
+    if (!record || record.ownerId !== identity.userId) return;
+    await db.documents.put({ ...record, encrypted, updatedAt: updated.updatedAt });
+  },
+
+  /**
+   * Persists the server's chunked upload session id (or clears it once the
+   * upload completes) so a restart can resume instead of re-sending parts.
+   */
+  async setUploadId(id: string, uploadId: string | null): Promise<void> {
+    const identity = requireUnlockedIdentity("update documents");
+    const current = await this.getLocal(id);
+    if (!current) return;
+    const updated: LocalDocument = {
+      ...current,
+      uploadId,
       updatedAt: new Date().toISOString(),
     };
     const encrypted = await encryptLocalValue(updated);

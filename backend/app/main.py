@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import audit, auth, clinical, continuity, documents, keys, patients, sync
+from app.api.routes import audit, auth, clinical, continuity, documents, keys, patients, portal, sync
 from app.core.config import get_settings
 
 settings = get_settings()
@@ -35,6 +35,8 @@ app.include_router(documents.router, prefix="/api/v1")
 app.include_router(sync.router, prefix="/api/v1")
 app.include_router(keys.router, prefix="/api/v1")
 app.include_router(continuity.router, prefix="/api/v1")
+app.include_router(portal.portal_router, prefix="/api/v1")
+app.include_router(portal.account_router, prefix="/api/v1")
 
 
 @app.get("/health", tags=["health"])

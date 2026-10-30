@@ -662,3 +662,205 @@ def test_a_record_pushed_by_one_device_is_pulled_by_another(api_client) -> None:
     assert pulled.status_code == 200, pulled.text
     entity_ids = [change["entity_id"] for change in pulled.json()["changes"]]
     assert patient_id in entity_ids
+
+
+# --------------------------------------------------------------------------
+# AI summaries: the one AI artifact that synchronizes
+# --------------------------------------------------------------------------
+
+def test_ai_summary_round_trips_and_fights_version_drift(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    patient_id = str(uuid4())
+    summary_id = str(uuid4())
+    sections = [
+        {
+            "section": "presenting_complaint",
+            "points": [{"text": "Fever for two days.", "source_line_ids": ["transcript"]}],
+        }
+    ]
+
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=patient_id,
+                idempotency_key=key(f"p-ai:{patient_id}"),
+                payload=patient_payload(),
+            ),
+            operation(
+                entity_id=summary_id,
+                idempotency_key=key(f"ai-create:{summary_id}"),
+                entity_type="aiSummary",
+                payload={
+                    "patient_id": patient_id,
+                    "text": "Structured summary drafted by the local model and edited by the clinician.",
+                    "source_artifact_id": "artifact-123",
+                    "sections": sections,
+                },
+            ),
+        ],
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["acknowledged"] == 2
+
+    # The summary comes back through the change feed so another device can
+    # apply it, exactly like a hand-entered note.
+    pull = client.get(
+        f"/api/v1/sync/changes?limit=50&device_id={DEVICE_ID}", headers=headers
+    )
+    assert pull.status_code == 200, pull.text
+    ai_changes = [
+        change
+        for change in pull.json()["changes"]
+        if change["entity_type"] == "aiSummary"
+    ]
+    assert len(ai_changes) == 1
+    assert ai_changes[0]["entity_version"] == 1
+    assert ai_changes[0]["payload"]["sections"] == sections
+
+    # A clinician edit bumps the version; a stale edit is a conflict.
+    edit = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=summary_id,
+                idempotency_key=key(f"ai-update:{summary_id}"),
+                entity_type="aiSummary",
+                operation_type="update",
+                base_version=1,
+                local_version=2,
+                payload={"text": "Clinician-edited summary text.", "expected_version": 1},
+            ),
+        ],
+    )
+    assert edit.status_code == 200, edit.text
+    assert edit.json()["acknowledged"] == 1
+
+    stale = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=summary_id,
+                idempotency_key=key(f"ai-stale:{summary_id}"),
+                entity_type="aiSummary",
+                operation_type="update",
+                base_version=1,
+                local_version=2,
+                payload={"text": "Written against version 1.", "expected_version": 1},
+            ),
+        ],
+    )
+    assert stale.status_code == 200
+    assert stale.json()["conflicts"] == 1
+
+
+def test_ai_summary_requires_a_known_patient_in_the_clinic(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    summary_id = str(uuid4())
+    response = send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=summary_id,
+                idempotency_key=key(f"ai-orphan:{summary_id}"),
+                entity_type="aiSummary",
+                payload={
+                    "patient_id": str(uuid4()),
+                    "text": "Summary for a patient that never synced.",
+                },
+            ),
+        ],
+    )
+    assert response.status_code == 200
+    result = response.json()["results"][0]
+    assert result["status"] == "rejected"
+    assert result["retryable"] is True
+
+
+# --------------------------------------------------------------------------
+# Concurrent pushes of the same record from two devices. On PostgreSQL the
+# two pushes genuinely race (the server serializes the applies on the clinic
+# row lock); on the SQLite test database the single shared connection cannot
+# take real parallelism, so the calls are serialized and the test still pins
+# the outcome both orders must produce.
+# --------------------------------------------------------------------------
+
+def test_two_devices_pushing_the_same_patient_in_parallel(api_client) -> None:
+    import os
+    import threading
+
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+    second_device = "11111111-2222-3333-4444-555555555556"
+    provision(client, headers, device_id=second_device)
+
+    patient_id = str(uuid4())
+    outcomes: list[dict] = []
+    failures: list[Exception] = []
+    using_postgres = not os.environ.get("TEST_DATABASE_URL", "sqlite://").startswith(
+        "sqlite"
+    )
+    # SQLite's StaticPool hands every session the same connection, which two
+    # threads must not touch at once, so the calls are serialized. On
+    # PostgreSQL the lock is redundant but harmless; the race there is genuine
+    # because each session holds its own connection.
+    request_lock = threading.Lock()
+
+    def push(device_id: str, idempotency_seed: str) -> None:
+        try:
+            operation = {
+                "operation_id": str(uuid4()),
+                "idempotency_key": key(f"parallel:{idempotency_seed}"),
+                "entity_type": "patient",
+                "entity_id": patient_id,
+                "operation_type": "create",
+                "base_version": 0,
+                "local_version": 1,
+                "payload": patient_payload(full_name="Synthetic Parallel Patient"),
+            }
+            with request_lock:
+                response = send(
+                    client,
+                    headers,
+                    [operation],
+                    device_id=device_id,
+                )
+            assert response.status_code == 200, response.text
+            outcomes.append(response.json())
+        except Exception as error:  # surfaced below, never swallowed
+            failures.append(error)
+
+    threads = [
+        threading.Thread(target=push, args=(DEVICE_ID, "first")),
+        threading.Thread(target=push, args=(second_device, "second")),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not failures, failures
+    assert len(outcomes) == 2
+    # Both devices get an acknowledgement: one create landed, the other was
+    # satisfied by the record already being there. Neither is an error.
+    for outcome in outcomes:
+        assert outcome["acknowledged"] == 1
+        assert outcome["results"][0]["status"] == "acknowledged"
+
+    # And the record exists exactly once.
+    listed = client.get(
+        "/api/v1/patients?search=Synthetic Parallel Patient", headers=headers
+    )
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1

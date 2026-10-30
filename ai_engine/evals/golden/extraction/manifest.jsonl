@@ -1,0 +1,5 @@
+{"id": "facts-en-001", "source_id": "en-004", "expected_facts": [{"category": "medication", "value": "paracetamol 500 mg"}, {"category": "other", "value": "three times a day"}]}
+{"id": "facts-en-002", "source_id": "en-005", "expected_facts": [{"category": "allergy", "value": "penicillin"}, {"category": "symptom", "value": "rash"}]}
+{"id": "facts-en-003", "source_id": "doc-en-003", "expected_facts": [{"category": "measurement", "value": "10.2"}, {"category": "measurement", "value": "110"}, {"category": "measurement", "value": "178"}]}
+{"id": "facts-en-004", "source_id": "doc-en-007", "expected_facts": [{"category": "measurement", "value": "92"}, {"category": "measurement", "value": "140/90"}, {"category": "measurement", "value": "100.2"}]}
+{"id": "facts-hi-001", "source_id": "hi-003", "expected_facts": [{"category": "medication", "value": "पैरासिटामोल"}, {"category": "other", "value": "दिन में तीन बार"}], "status": "record-manually"}

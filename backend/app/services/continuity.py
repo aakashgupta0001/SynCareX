@@ -21,7 +21,6 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AllergyRecord,
-    AuditLog,
     Clinic,
     ClinicalNote,
     ClinicPairing,
@@ -56,6 +55,7 @@ from app.schemas.continuity import (
     TransferPackageCreate,
 )
 from app.schemas.patients import PatientCreate, PatientRead
+from app.services.audit_chain import append_audit_entry
 
 
 def _utc_now() -> datetime:
@@ -188,19 +188,18 @@ class ContinuityService:
         self.db.add(passport)
 
         # Audit event
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="passport.issue",
-                entity_type="emergency_passport",
-                entity_id=passport.id,
-                details={
-                    "patient_id": str(patient.id),
-                    "token_hash": token_hash[:12] + "...",
-                    "expires_at": expires_at.isoformat(),
-                },
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="passport.issue",
+            entity_type="emergency_passport",
+            entity_id=passport.id,
+            details={
+                "patient_id": str(patient.id),
+                "token_hash": token_hash[:12] + "...",
+                "expires_at": expires_at.isoformat(),
+            },
         )
         self.db.commit()
         self.db.refresh(passport)
@@ -272,15 +271,14 @@ class ContinuityService:
                 )
 
         # Audit verification lookup
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="passport.verify",
-                entity_type="emergency_passport",
-                entity_id=passport.id,
-                details={"verified_online": "true"},
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="passport.verify",
+            entity_type="emergency_passport",
+            entity_id=passport.id,
+            details={"verified_online": "true"},
         )
         self.db.commit()
 
@@ -315,15 +313,14 @@ class ContinuityService:
         passport.revocation_reason = reason
         passport.version += 1
 
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="passport.revoke",
-                entity_type="emergency_passport",
-                entity_id=passport.id,
-                details={"reason": reason},
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="passport.revoke",
+            entity_type="emergency_passport",
+            entity_id=passport.id,
+            details={"reason": reason},
         )
         self.db.commit()
         self.db.refresh(passport)
@@ -393,19 +390,18 @@ class ContinuityService:
             version=1,
         )
         self.db.add(referral)
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="referral.create",
-                entity_type="referral",
-                entity_id=referral.id,
-                details={
-                    "patient_id": str(patient.id),
-                    "receiving_clinic_id": str(data.receiving_clinic_id),
-                    "status": data.status,
-                },
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="referral.create",
+            entity_type="referral",
+            entity_id=referral.id,
+            details={
+                "patient_id": str(patient.id),
+                "receiving_clinic_id": str(data.receiving_clinic_id),
+                "status": data.status,
+            },
         )
         self.db.commit()
         self.db.refresh(referral)
@@ -467,19 +463,18 @@ class ContinuityService:
         elif new_status == "accepted":
             referral.accepted_at = now
 
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="referral.status_change",
-                entity_type="referral",
-                entity_id=referral.id,
-                details={
-                    "old_status": old_status,
-                    "new_status": new_status,
-                    "note": note or "",
-                },
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="referral.status_change",
+            entity_type="referral",
+            entity_id=referral.id,
+            details={
+                "old_status": old_status,
+                "new_status": new_status,
+                "note": note or "",
+            },
         )
         self.db.commit()
         self.db.refresh(referral)
@@ -513,15 +508,14 @@ class ContinuityService:
             version=1,
         )
         self.db.add(followup)
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="followup.create",
-                entity_type="followup",
-                entity_id=followup.id,
-                details={"scheduled_at": data.scheduled_at.isoformat(), "reason": data.reason},
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="followup.create",
+            entity_type="followup",
+            entity_id=followup.id,
+            details={"scheduled_at": data.scheduled_at.isoformat(), "reason": data.reason},
         )
         self.db.commit()
         self.db.refresh(followup)
@@ -589,15 +583,14 @@ class ContinuityService:
         followup.status = "rescheduled"
         followup.version += 1
 
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="followup.reschedule",
-                entity_type="followup",
-                entity_id=followup.id,
-                details=history_entry,
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="followup.reschedule",
+            entity_type="followup",
+            entity_id=followup.id,
+            details=history_entry,
         )
         self.db.commit()
         self.db.refresh(followup)
@@ -638,15 +631,14 @@ class ContinuityService:
             pairing.paired_by = self.user.id
             pairing.paired_at = now
 
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="clinic.pair",
-                entity_type="clinic_pairing",
-                entity_id=pairing.id,
-                details={"target_clinic_id": str(target_clinic_id)},
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="clinic.pair",
+            entity_type="clinic_pairing",
+            entity_id=pairing.id,
+            details={"target_clinic_id": str(target_clinic_id)},
         )
         self.db.commit()
         self.db.refresh(pairing)
@@ -763,19 +755,18 @@ class ContinuityService:
             source_provenance=package_body["source_provenance"],
         )
         self.db.add(transfer_pkg)
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="transfer.export",
-                entity_type="transfer_package",
-                entity_id=transfer_pkg.id,
-                details={
-                    "transfer_id": transfer_id,
-                    "target_clinic_id": str(data.target_clinic_id),
-                    "checksum": checksum,
-                },
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="transfer.export",
+            entity_type="transfer_package",
+            entity_id=transfer_pkg.id,
+            details={
+                "transfer_id": transfer_id,
+                "target_clinic_id": str(data.target_clinic_id),
+                "checksum": checksum,
+            },
         )
         self.db.commit()
         self.db.refresh(transfer_pkg)
@@ -951,19 +942,18 @@ class ContinuityService:
         pkg.imported_by = self.user.id
         pkg.imported_patient_id = target_patient_id
 
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action="transfer.import",
-                entity_type="transfer_package",
-                entity_id=pkg.id,
-                details={
-                    "transfer_id": transfer_id,
-                    "target_patient_id": str(target_patient_id),
-                    "records_count": str(records_count),
-                },
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action="transfer.import",
+            entity_type="transfer_package",
+            entity_id=pkg.id,
+            details={
+                "transfer_id": transfer_id,
+                "target_patient_id": str(target_patient_id),
+                "records_count": str(records_count),
+            },
         )
         self.db.commit()
 

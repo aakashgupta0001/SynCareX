@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     PatientSearchTerm,
+    AISummary,
     AllergyRecord,
-    AuditLog,
     ClinicalNote,
     Clinic,
     Consultation,
     DocumentRecord,
+    EntitySealedContent,
     MedicationRecord,
     Observation,
     Patient,
@@ -40,7 +41,11 @@ from app.models import (
     PatientFollowUp,
 )
 from app.repositories.patients import PatientRepository
+from app.services.audit_chain import append_audit_entry
 from app.schemas.clinical import (
+    AISummaryCreate,
+    AISummaryRead,
+    AISummaryUpdate,
     AllergyCreate,
     AllergyRead,
     AllergyUpdate,
@@ -262,16 +267,16 @@ class SyncService:
                 ),
             )
         )
-        self.db.add(
-            AuditLog(
-                clinic_id=self.clinic_id,
-                actor_id=self.user.id,
-                action=f"sync.{operation.entity_type}.{operation.operation_type}",
-                entity_type=operation.entity_type,
-                entity_id=operation.entity_id,
-                details={"device": self.device_uid, "version": str(version)},
-            )
+        append_audit_entry(
+            self.db,
+            clinic_id=self.clinic_id,
+            actor_id=self.user.id,
+            action=f"sync.{operation.entity_type}.{operation.operation_type}",
+            entity_type=operation.entity_type,
+            entity_id=operation.entity_id,
+            details={"device": self.device_uid, "version": str(version)},
         )
+        self._store_generic_sealed_content(operation, version)
         try:
             self.db.commit()
         except IntegrityError:
@@ -369,6 +374,8 @@ class SyncService:
             ("referral", "update"): self._referral_update,
             ("followup", "create"): self._followup_create,
             ("followup", "update"): self._followup_update,
+            ("aiSummary", "create"): self._ai_summary_create,
+            ("aiSummary", "update"): self._ai_summary_update,
         }
         handler = handlers.get(key)
         if handler is None:
@@ -458,6 +465,43 @@ class SyncService:
                 )
 
     # --------------------------------------------------------------- patients
+
+    def _store_generic_sealed_content(
+        self, operation: SyncOperationIn, version: int
+    ) -> None:
+        """Keeps the clinic-key envelope for any non-patient entity.
+
+        Patients carry their sealed columns inline; everything else lands here,
+        verbatim, in the same transaction as the acknowledged result. The
+        server cannot read these blobs — they are the copy that becomes
+        authoritative when the plaintext columns are dropped.
+        """
+        if operation.sealed_content is None or operation.entity_type == "patient":
+            return
+        existing = self.db.scalar(
+            select(EntitySealedContent).where(
+                EntitySealedContent.clinic_id == self.clinic_id,
+                EntitySealedContent.entity_type == operation.entity_type,
+                EntitySealedContent.entity_id == operation.entity_id,
+            )
+        )
+        if existing is not None:
+            existing.ciphertext = operation.sealed_content.ciphertext
+            existing.iv = operation.sealed_content.iv
+            existing.key_epoch = operation.sealed_content.key_epoch
+            existing.entity_version = version
+            return
+        self.db.add(
+            EntitySealedContent(
+                clinic_id=self.clinic_id,
+                entity_type=operation.entity_type,
+                entity_id=operation.entity_id,
+                ciphertext=operation.sealed_content.ciphertext,
+                iv=operation.sealed_content.iv,
+                key_epoch=operation.sealed_content.key_epoch,
+                entity_version=version,
+            )
+        )
 
     def _patient_create(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
         existing = self.db.scalar(
@@ -642,6 +686,56 @@ class SyncService:
         note.version += 1
         self.db.flush()
         return _dump(ClinicalNoteRead.model_validate(note)), note.version
+
+    # ------------------------------------------------------- AI summaries
+
+    def _ai_summary_create(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        existing = self.db.get(AISummary, operation.entity_id)
+        if existing is not None and existing.clinic_id == self.clinic_id:
+            return _dump(AISummaryRead.model_validate(existing)), existing.version
+        payload = dict(operation.payload)
+        data = AISummaryCreate.model_validate(
+            {
+                "id": str(operation.entity_id),
+                "patient_id": payload.get("patient_id") or payload.get("patientId"),
+                "text": payload.get("text"),
+                "source_artifact_id": payload.get("source_artifact_id")
+                or payload.get("sourceArtifactId"),
+                "sections": payload.get("sections") or [],
+            }
+        )
+        self._require_patient(data.patient_id)
+        summary = AISummary(
+            id=operation.entity_id,
+            clinic_id=self.clinic_id,
+            patient_id=data.patient_id,
+            author_id=self.user.id,
+            source_artifact_id=data.source_artifact_id,
+            sections=data.sections,
+            clinician_edited=True,
+            text=data.text,
+            version=1,
+        )
+        self.db.add(summary)
+        self.db.flush()
+        return _dump(AISummaryRead.model_validate(summary)), summary.version
+
+    def _ai_summary_update(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
+        summary = self.db.get(AISummary, operation.entity_id)
+        if summary is None or summary.clinic_id != self.clinic_id:
+            raise OperationRejected(
+                "The AI summary this edit belongs to has not reached the server yet.",
+                retryable=True,
+            )
+        snapshot = _dump(AISummaryRead.model_validate(summary))
+        payload = dict(operation.payload)
+        expected = payload.pop("expected_version", operation.base_version)
+        self._check_version(summary.version, expected, snapshot)
+        data = AISummaryUpdate.model_validate(payload)
+        summary.text = data.text
+        summary.version += 1
+        self.db.flush()
+        return _dump(AISummaryRead.model_validate(summary)), summary.version
 
     # ------------------------------------------------- observations and more
 

@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { db } from "../database/db";
+import { api, ApiError, type ClinicKeyStatusResponse } from "../services/api";
 import {
   forgetClinicKey,
   isClinicKeyAvailable,
@@ -68,6 +69,104 @@ describe("clinic data key", () => {
     setOnline(false);
     await resetWorkspace();
     await forgetClinicKey();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockNoWrapForThisUser() {
+    vi.spyOn(api, "getClinicKeyWrap").mockRejectedValue(
+      new ApiError("No clinic key is wrapped for this account.", 404),
+    );
+  }
+
+  function mockClinicStatus(overrides: Partial<ClinicKeyStatusResponse> = {}) {
+    return vi.spyOn(api, "getClinicKeyStatus").mockResolvedValue({
+      clinic_id: "clinic-1",
+      key_epoch: null,
+      wrapped_for_this_user: false,
+      user_count_with_access: 0,
+      records_encrypted: false,
+      ...overrides,
+    });
+  }
+
+  async function unlockOnline() {
+    return unlockClinicKey(PASSPHRASE, {
+      online: true,
+      clinicId: "clinic-1",
+      userId: testUser.id,
+    });
+  }
+
+  it("waits instead of minting a second key when the clinic already has one", async () => {
+    mockNoWrapForThisUser();
+    mockClinicStatus({
+      key_epoch: 1,
+      wrapped_for_this_user: false,
+      user_count_with_access: 1,
+    });
+    const publish = vi.spyOn(api, "publishClinicKeyWraps");
+
+    const result = await unlockOnline();
+
+    // A second key would fork the clinic's records and search hashes across
+    // two keys, so nothing is published and nothing is cached.
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.available).toBe(false);
+    expect(result.reason).toMatch(/has not been shared with this account/i);
+    expect(await db.clinicKeys.count()).toBe(0);
+    expect(isClinicKeyAvailable()).toBe(false);
+  });
+
+  it("creates the key when the clinic has none", async () => {
+    mockNoWrapForThisUser();
+    mockClinicStatus();
+    const publish = vi.spyOn(api, "publishClinicKeyWraps").mockResolvedValue({
+      clinic_id: "clinic-1",
+      key_epoch: 1,
+      wrapped_for_this_user: true,
+      user_count_with_access: 1,
+      records_encrypted: false,
+    });
+
+    const result = await unlockOnline();
+
+    expect(result.available).toBe(true);
+    expect(result.reason).toBeNull();
+    expect(publish).toHaveBeenCalledTimes(1);
+    const [wraps] = publish.mock.calls[0];
+    expect(wraps).toHaveLength(1);
+    expect(wraps[0]).toMatchObject({
+      user_id: testUser.id,
+      key_epoch: 1,
+      kdf_iterations: 310_000,
+    });
+    expect(isClinicKeyAvailable()).toBe(true);
+  });
+
+  it("treats a publish rejected by the server guard as waiting, and caches nothing", async () => {
+    mockNoWrapForThisUser();
+    // Status unreadable, so the decision falls to the server's guard, which
+    // rejects the publish because the clinic already has a key.
+    vi.spyOn(api, "getClinicKeyStatus").mockRejectedValue(
+      new ApiError("Request failed (500)", 500),
+    );
+    vi.spyOn(api, "publishClinicKeyWraps").mockRejectedValue(
+      new ApiError(
+        "This clinic already has an encryption key. A user who holds it must share it with you.",
+        409,
+      ),
+    );
+
+    const result = await unlockOnline();
+
+    expect(result.available).toBe(false);
+    expect(result.reason).toMatch(/has not been shared with this account/i);
+    // The rejected key must not linger on the device as if it were real.
+    expect(await db.clinicKeys.count()).toBe(0);
+    expect(isClinicKeyAvailable()).toBe(false);
   });
 
   it("does nothing when no key is available, so dual-write stays optional", async () => {

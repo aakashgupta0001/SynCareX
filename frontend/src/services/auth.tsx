@@ -21,6 +21,7 @@ import {
 import { getLocalDeviceId, markDeviceAuthorized } from "../offline/device";
 import { auditRepository } from "../repositories/auditRepository";
 import { lockClinicKey, unlockClinicKey } from "../security/clinicKey";
+import { patientRepository } from "../repositories/patientRepository";
 import { requestPersistentStorage } from "../offline/storage";
 
 export type SessionMode = "online" | "offline";
@@ -45,6 +46,12 @@ interface AuthContextValue {
   session: Session | null;
   /** Reason the previous session ended, shown on the sign-in screen. */
   lockNotice: string | null;
+  /**
+   * Email of a server session restored via the refresh cookie on page load.
+   * The vault still needs its passphrase, so the sign-in screen pre-fills
+   * this email and only asks for the passphrase.
+   */
+  restoredEmail: string | null;
   login: (email: string, password: string) => Promise<LoginResult>;
   logout: (options?: { forgetDevice?: boolean }) => Promise<string | null>;
   lockNow: (reason?: string) => void;
@@ -151,6 +158,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         });
         if (!clinicKey.available && clinicKey.reason) {
           warning = warning ? `${warning} ${clinicKey.reason}` : clinicKey.reason;
+        }
+        if (clinicKey.available) {
+          // The key just became usable on this device: records that were
+          // synchronized before it arrived have no keyed search terms on the
+          // server, and keyed-only search would miss them. The backfill
+          // queues one content-identical update per local patient; failures
+          // are non-fatal (the durable queue retries, and the plaintext
+          // union still covers search meanwhile).
+          patientRepository
+            .enqueueSearchTermBackfill()
+            .catch(() => undefined);
         }
 
         emailRef.current = user.email;
@@ -288,16 +306,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [session?.offlineSessionExpiresAt, lockNow]);
 
+  // A page reload drops the in-memory access token and locks the vault, but
+  // the refresh cookie survives. Restoring the server session here keeps the
+  // user's identity instead of presenting a cold login form after every
+  // refresh. The vault passphrase is still required: it is the only thing
+  // that can decrypt the local vault, and it deliberately never persists.
+  const [restoredEmail, setRestoredEmail] = useState<string | null>(null);
+  useEffect(() => {
+    if (session) return;
+    let cancelled = false;
+    api
+      .restoreSession()
+      .then((restored) => {
+        if (!cancelled && restored) setRestoredEmail(restored.user.email);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
   const value = useMemo(
     () => ({
       session,
       lockNotice,
+      restoredEmail,
       login,
       logout,
       lockNow,
       clearLockNotice: () => setLockNotice(null),
     }),
-    [session, lockNotice, login, logout, lockNow],
+    [session, lockNotice, restoredEmail, login, logout, lockNow],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

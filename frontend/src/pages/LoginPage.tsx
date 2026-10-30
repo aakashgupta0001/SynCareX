@@ -1,16 +1,38 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Activity, ArrowRight, HeartPulse, LockKeyhole } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../services/auth";
 import { useConnectivityState } from "../hooks/useConnectivity";
 import { OfflineSessionExpiredError } from "../security/localVault";
 
+/**
+ * Web Crypto is only available in a secure context (HTTPS, or localhost).
+ * A device that opened the app over plain HTTP on a LAN address cannot
+ * unlock the vault at all, so say so instead of crashing mid-sign-in.
+ */
+function isInsecureDeployment(): boolean {
+  try {
+    if (window.isSecureContext !== false) return false;
+    return !["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function LoginPage() {
-  const { login, lockNotice, clearLockNotice } = useAuth();
+  const { login, lockNotice, restoredEmail, clearLockNotice } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const { browserOnline, apiUsable } = useConnectivityState();
+  const insecure = isInsecureDeployment();
   const [email, setEmail] = useState("");
+
+  // A server session restored from the refresh cookie means this device was
+  // signed in moments ago: pre-fill the email so the user only needs their
+  // passphrase to unlock the local vault.
+  useEffect(() => {
+    if (restoredEmail) setEmail(restoredEmail);
+  }, [restoredEmail]);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -84,7 +106,19 @@ export function LoginPage() {
             {networkLabel}
           </span>
           <h2>Welcome back</h2>
-          <p className="login-subtitle">Sign in to your clinic workspace.</p>
+          <p className="login-subtitle">
+            {restoredEmail
+              ? "Server session restored. Enter your passphrase to unlock this device."
+              : "Sign in to your clinic workspace."}
+          </p>
+          {insecure && (
+            <div className="notice notice-warn" role="alert">
+              Encryption is unavailable over this insecure connection (HTTP).
+              Open the app via its HTTPS address — for local network testing:
+              <code> npm run dev:https </code> on the server, then use the
+              https:// address it prints.
+            </div>
+          )}
           {lockNotice && (
             <div className="notice notice-warn" role="status">
               {lockNotice}

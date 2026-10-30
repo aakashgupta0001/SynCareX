@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { rankHistoryLines, tokenizeQuery } from "../offline/historyRanking";
+import {
+  rankHistoryEntries,
+  rankHistoryLines,
+  tokenizeQuery,
+} from "../offline/historyRanking";
 
 describe("local history retrieval ranking", () => {
   it("splits a query into usable terms", () => {
@@ -80,5 +84,28 @@ describe("local history retrieval ranking", () => {
     // With room for only one, the precise line wins on length normalization.
     const tight = rankHistoryLines([verbose, precise], "allergy", 60);
     expect(tight.lines).toEqual([precise]);
+  });
+
+  it("ranks entries with their IDs intact, so a summary can cite them", () => {
+    const entries = [
+      { id: "consultation:1", text: "Consultation (2024-01-01): fever review" },
+      { id: "note:2", text: "Clinical note (general): unrelated" },
+      { id: "consultation:3", text: "Consultation (2024-03-01): fever recurring" },
+    ];
+    const ranked = rankHistoryEntries(
+      entries,
+      (entry) => entry.text,
+      "fever",
+      10_000,
+    );
+    // The IDs travel with the selected lines: these are what the structured
+    // summary cites so every point traces back to a record.
+    expect(ranked.entries.map((entry) => entry.id)).toEqual([
+      "consultation:1",
+      "consultation:3",
+    ]);
+    expect(ranked.entries.every((entry) => entry.text.includes("fever"))).toBe(
+      true,
+    );
   });
 });

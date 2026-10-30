@@ -25,7 +25,9 @@ MODELS = (
         url="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
         size_bytes=77_691_713,
         sha256="be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-        minimum_free_ram_mb=2_048,
+        # Measured peak on CPU is well under 1 GiB; 1024 keeps headroom
+        # without blocking entry-level machines that run it comfortably.
+        minimum_free_ram_mb=1_024,
         runtime="whisper.cpp",
         languages=("Hindi", "English", "multilingual"),
         license="MIT",
@@ -67,7 +69,9 @@ MODELS = (
         ),
         size_bytes=397_808_192,
         sha256="6eb923e7d26e9cea28811e1a8e852009b21242fb157b26149d3b188f3a8c8653",
-        minimum_free_ram_mb=4_096,
+        # Measured peak ~1.4 GiB (weights ~400 MB + KV cache at the 8192-token
+        # context + runtime overhead); 1536 is the honest floor.
+        minimum_free_ram_mb=1_536,
         runtime="llama.cpp",
         languages=("Hindi", "English", "multilingual"),
         license="Apache-2.0",

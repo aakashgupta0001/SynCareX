@@ -7,6 +7,7 @@ access control around them. See docs/security/E2E_ENCRYPTION_DESIGN.md.
 """
 
 import base64
+import hashlib
 import secrets
 from uuid import uuid4
 
@@ -238,3 +239,171 @@ def test_a_user_without_the_key_cannot_create_a_second_clinic_key(api_client) ->
     status_now = client.get("/api/v1/keys/clinic/status", headers=doctor_headers).json()
     assert status_now["user_count_with_access"] == 1
     assert status_now["wrapped_for_this_user"] is False
+
+
+# --------------------------------------------------------------------------
+# Identity keypairs: the fix for the design's "known gap". A holder of the
+# clinic key can now wrap it for a colleague by sealing it to their published
+# ECDH public key — no passphrase sharing, no second clinic key.
+# --------------------------------------------------------------------------
+
+def _identity_jwk(seed: str) -> str:
+    """A syntactically valid P-256 JWK. The bytes are fake but the shape is
+    exactly what the client publishes."""
+    import json as _json
+
+    return _json.dumps(
+        {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64.urlsafe_b64encode(hashlib.sha256(f"x:{seed}".encode()).digest())
+            .decode()
+            .rstrip("="),
+            "y": base64.urlsafe_b64encode(hashlib.sha256(f"y:{seed}".encode()).digest())
+            .decode()
+            .rstrip("="),
+        }
+    )
+
+
+def test_identity_key_publish_fetch_and_replacement(api_client) -> None:
+    client = api_client["client"]
+    headers = auth(client)
+    me = login(client)["user"]["id"]
+
+    published = client.put(
+        "/api/v1/keys/identity",
+        json={"public_key": _identity_jwk("first")},
+        headers=headers,
+    )
+    assert published.status_code == 201, published.text
+    assert published.json()["user_id"] == me
+
+    fetched = client.get(f"/api/v1/keys/identity/{me}", headers=headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["public_key"] == _identity_jwk("first")
+
+    # Re-provisioning a device is legal, but it changes the key colleagues
+    # wrap to, so it is audited as its own action.
+    replaced = client.put(
+        "/api/v1/keys/identity",
+        json={"public_key": _identity_jwk("second")},
+        headers=headers,
+    )
+    assert replaced.status_code == 201
+    audit = client.get("/api/v1/audit", headers=headers)
+    assert "encryption.identity_key.published" in audit.text
+    assert "encryption.identity_key.replaced" in audit.text
+
+
+def test_identity_key_rejects_non_p256_material(api_client) -> None:
+    client = api_client["client"]
+    headers = auth(client)
+
+    for bad in [
+        "not json at all",
+        '{"kty": "RSA", "n": "x", "e": "AQAB"}',
+        '{"kty": "EC", "crv": "P-384", "x": "a", "y": "b"}',
+        '{"kty": "EC", "crv": "P-256", "x": "a"}',
+    ]:
+        refused = client.put(
+            "/api/v1/keys/identity", json={"public_key": bad}, headers=headers
+        )
+        assert refused.status_code == 422, bad
+
+
+def test_identity_keys_never_cross_the_clinic_boundary(api_client) -> None:
+    client = api_client["client"]
+    headers = auth(client)
+    outsider_id = login(client, "other@example.com")["user"]["id"]
+
+    # An outsider's key is invisible even when it exists...
+    outside_publish = client.post(
+        "/api/v1/auth/login",
+        json={"email": "other@example.com", "password": PASSWORD},
+    )
+    assert outside_publish.status_code == 200
+    outsider_headers = {
+        "Authorization": f"Bearer {outside_publish.json()['access_token']}"
+    }
+    assert (
+        client.put(
+            "/api/v1/keys/identity",
+            json={"public_key": _identity_jwk("outsider")},
+            headers=outsider_headers,
+        ).status_code
+        == 201
+    )
+
+    missing = client.get(f"/api/v1/keys/identity/{outsider_id}", headers=headers)
+    assert missing.status_code == 404
+
+    # ...and an insider who never published one is a 404 too, not an error.
+    nurse_id = login(client, "nurse@example.com")["user"]["id"]
+    none_yet = client.get(f"/api/v1/keys/identity/{nurse_id}", headers=headers)
+    assert none_yet.status_code == 404
+
+
+def test_the_key_holder_can_wrap_for_an_identity_key(api_client) -> None:
+    client = api_client["client"]
+    doctor_session = login(client)
+    doctor_headers = {"Authorization": f"Bearer {doctor_session['access_token']}"}
+    doctor_id = doctor_session["user"]["id"]
+    nurse_id = login(client, "nurse@example.com")["user"]["id"]
+
+    # The nurse publishes her identity key from her own device.
+    assert (
+        client.post(
+            "/api/v1/auth/login",
+            json={"email": "nurse@example.com", "password": PASSWORD},
+        ).status_code
+        == 200
+    )
+    nurse_headers = {"Authorization": f"Bearer {login(client, 'nurse@example.com')['access_token']}"}
+    assert (
+        client.put(
+            "/api/v1/keys/identity",
+            json={"public_key": _identity_jwk("nurse")},
+            headers=nurse_headers,
+        ).status_code
+        == 201
+    )
+
+    # The doctor creates the clinic key and wraps it for the nurse by sealing
+    # it to her public key: no passphrase ever changed hands.
+    identity = client.get(f"/api/v1/keys/identity/{nurse_id}", headers=doctor_headers)
+    assert identity.status_code == 200
+    wrap = synthetic_wrap(nurse_id)
+    wrap["wrap_type"] = "identity"
+    wrap["ephemeral_public_key"] = _identity_jwk("ephemeral")
+    wrap["kdf_salt"] = ""
+    published = client.post(
+        "/api/v1/keys/clinic", json={"wraps": [wrap]}, headers=doctor_headers
+    )
+    assert published.status_code == 201, published.text
+    assert published.json()["user_count_with_access"] == 1
+
+    members = client.get("/api/v1/keys/clinic/members", headers=doctor_headers)
+    assert members.status_code == 200
+    by_id = {member["id"]: member for member in members.json()}
+    assert by_id[nurse_id]["holds_clinic_key"] is True
+    assert by_id[nurse_id]["has_identity_key"] is True
+    assert by_id[doctor_id]["holds_clinic_key"] is False
+
+    # The nurse's own wrap comes back with the identity fields intact.
+    mine = client.get("/api/v1/keys/clinic", headers=nurse_headers)
+    assert mine.status_code == 200
+    body = mine.json()
+    assert body["wrap_type"] == "identity"
+    assert body["ephemeral_public_key"] == _identity_jwk("ephemeral")
+
+
+def test_an_identity_wrap_without_an_ephemeral_key_is_refused(api_client) -> None:
+    client = api_client["client"]
+    headers = auth(client)
+
+    wrap = synthetic_wrap(login(client)["user"]["id"])
+    wrap["wrap_type"] = "identity"
+    wrap["kdf_salt"] = ""
+    refused = client.post("/api/v1/keys/clinic", json={"wraps": [wrap]}, headers=headers)
+    assert refused.status_code == 422

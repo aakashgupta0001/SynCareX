@@ -32,6 +32,105 @@ cd syncarex/backend && python -m venv ../.venv && ../.venv/Scripts/python.exe -m
 cd syncarex/frontend && npm ci
 ```
 
+## 2b. Docker deployment (recommended for a clinic server)
+
+The repository ships a complete container stack: PostgreSQL, the API server
+(migrations run on container start) and an nginx image that serves the PWA
+same-origin with the API. Same-origin matters: the session cookie is
+`SameSite=Strict` and the service worker expects the API next door.
+
+Prerequisites: Docker Engine + Compose v2 on the server. Docker is not
+needed on clinician devices — they only need a browser, and the local AI
+engine is installed per device (see §AI, below).
+
+### Steps
+
+1. Copy the repository to the server and configure it:
+
+   ```
+   cp .env.example .env
+   ```
+
+   Then set, at minimum: `APP_ENV=production`, a unique 32+-character
+   `JWT_SECRET`, `COOKIE_SECURE=true`, `POSTGRES_*`, and `FRONTEND_PORT`
+   (default 80). Leave `DATABASE_URL` as-is — the backend container builds
+   its own PostgreSQL URL from `POSTGRES_*`.
+
+2. Build and start everything:
+
+   ```
+   docker compose build
+   docker compose up -d
+   ```
+
+3. Seed the first administrator (one-shot; only for a fresh database):
+
+   ```
+   docker compose --profile seed run --rm backend-seed
+   ```
+
+   The container runs with `APP_ENV=development` because production startup
+   refuses seeded passwords. Sign in immediately and change the admin
+   password, then delete `SEED_ADMIN_PASSWORD` from `.env`.
+
+4. Verify: `curl http://<server>/health` returns `{"status":"ok"}`, and the
+   app loads at `http://<server>/` from a clinic device.
+
+### TLS
+
+`COOKIE_SECURE=true` means browsers only send the session cookie over
+HTTPS, so a production deployment must terminate TLS in front of nginx — a
+reverse proxy (Caddy, Traefik, certbot-managed nginx) with a real
+certificate for the server's hostname, or a self-signed certificate that
+clinic devices trust explicitly. A LAN HTTP pilot cannot use secure
+cookies: it must set `COOKIE_SECURE=false` and stay inside a trusted
+network.
+
+### Backups
+
+The two volumes that hold irreplaceable data are `postgres-data` (the
+database) and `documents-data` (uploaded clinical documents). Back up both;
+§7 covers the procedure.
+
+### Local AI engine is per-device by design
+
+The AI engine is a loopback-only service on each clinician's device; it is
+deliberately not part of the server stack. Server-side inference would move
+voice notes and document images onto the network, which the threat model
+avoids. Install whisper.cpp/llama.cpp/Tesseract on each device that needs
+it, set its `SYNCAREX_AI_ALLOWED_ORIGINS` to the server's URL, and generate
+that device's token with `ai_engine/run_local.ps1`.
+
+## 2c. Render deployment (managed cloud)
+
+`render.yaml` at the repository root is a Render Blueprint: it provisions a
+managed PostgreSQL database, the API service (with a 1 GB documents disk),
+the nginx frontend, and a one-time seed job. Deploy:
+
+1. Push this repository to GitHub (Render deploys from a Git repository).
+2. Render dashboard -> **New -> Blueprint** -> select the repository -> Apply.
+   Render provisions `syncarex-postgres`, `syncarex-backend`,
+   `syncarex-frontend` (served at `https://syncarex-frontend.onrender.com`)
+   and the `syncarex-seed` job. HTTPS is automatic.
+3. Set the secret environment variables when prompted or under each
+   service's Environment tab: `JWT_SECRET` (32+ random characters),
+   `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD` (12+ characters, seed job only).
+4. Jobs tab -> **syncarex-seed** -> Trigger Run (once, on a fresh database).
+   Sign in, change the admin password immediately.
+5. Verify: `https://syncarex-frontend.onrender.com/health` returns
+   `{"status":"ok"}` and the app loads same-origin.
+
+Costs and limits: `starter` web services sleep after ~15 minutes idle (first
+request after that takes ~50 seconds); the free PostgreSQL plan expires
+after 30 days — move to a paid plan before real use. The documents disk
+requires a paid plan. Update `FRONTEND_ORIGINS` on the backend if you attach
+a custom domain. The local AI engine stays per-device (see §2b).
+
+Why not Vercel/Firebase: the backend is a long-running FastAPI service with
+PostgreSQL and on-disk clinical documents — not a serverless workload. The
+frontend alone could live anywhere, but keeping it same-origin with the API
+(on nginx) is what makes the session cookie and service worker work.
+
 ## 3. Configure
 
 Copy `.env.example` to `.env` at the repository root and set every value.

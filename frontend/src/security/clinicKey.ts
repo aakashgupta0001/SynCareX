@@ -1,6 +1,7 @@
 import { db } from "../database/db";
 import { api, ApiError } from "../services/api";
 import { base64ToBytes, bytesToBase64 } from "./localVault";
+import { unwrapIdentityWrapRaw } from "./identityKey";
 
 /**
  * Client side of the clinic data key.
@@ -24,8 +25,37 @@ import { base64ToBytes, bytesToBase64 } from "./localVault";
 const WRAP_ITERATIONS = 310_000;
 const CACHE_ID = "current";
 
+/**
+ * Shown when the clinic already has a key that is not wrapped for this
+ * account. The account must wait for a holder to share it; minting a fresh
+ * key here would fork the clinic's records and search hashes across two
+ * keys, which becomes data loss once the plaintext columns are dropped.
+ */
+const WAITING_FOR_SHARE_REASON =
+  "This clinic already has an encryption key, but it has not been shared " +
+  "with this account yet. A device that holds the key must share it; until " +
+  "then, server-side encryption is not active for this account.";
+
+/**
+ * Shown when a wrap sealed to this account's identity key cannot be opened:
+ * the private identity key is missing on this device, or the wrap was made
+ * for a different (replaced) identity key.
+ */
+const IDENTITY_UNOPENABLE_REASON =
+  "The clinic key could not be opened with this account's identity key. " +
+  "The private identity key is missing on this device, or the key was " +
+  "shared before your identity key was (re)published. Ask a clinic key " +
+  "holder to share it with you again.";
+
 let clinicKey: CryptoKey | null = null;
 let clinicKeyEpoch: number | null = null;
+/**
+ * Raw clinic key bytes, held only while the key is unlocked. The CryptoKey
+ * itself is non-extractable, so the raw bytes must be captured at unwrap
+ * time; they are what gets sealed to a colleague's identity key when
+ * sharing. Never persisted.
+ */
+let rawClinicKeyBytes: Uint8Array | null = null;
 
 export interface CachedClinicKey {
   id: string;
@@ -35,6 +65,10 @@ export interface CachedClinicKey {
   wrapIv: string;
   kdfSalt: string;
   kdfIterations: number;
+  /** "passphrase" (default) or "identity"; see the wrap scheme docs. */
+  wrapType?: "passphrase" | "identity";
+  /** Ephemeral public JWK string; present only for identity wraps. */
+  ephemeralPublicKey?: string;
   cachedAt: string;
 }
 
@@ -59,22 +93,67 @@ async function wrappingKey(
   );
 }
 
-/** Unwraps a cached blob into an in-memory key. */
-async function unwrap(cached: CachedClinicKey, password: string): Promise<CryptoKey> {
+function importAesKey(raw: Uint8Array): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM", length: 256 }, false, [
+    "encrypt",
+    "decrypt",
+  ]);
+}
+
+/**
+ * Unwraps a passphrase-sealed cached blob into the raw key bytes and an
+ * in-memory key. Throws when the passphrase is wrong.
+ */
+async function unwrapWithPassphrase(
+  cached: CachedClinicKey,
+  password: string,
+): Promise<{ key: CryptoKey; raw: Uint8Array }> {
   const kek = await wrappingKey(
     password,
     base64ToBytes(cached.kdfSalt),
     cached.kdfIterations,
   );
-  const raw = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: base64ToBytes(cached.wrapIv) as unknown as BufferSource },
-    kek,
-    base64ToBytes(cached.wrappedKey) as unknown as BufferSource,
+  const raw = new Uint8Array(
+    await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: base64ToBytes(cached.wrapIv) as unknown as BufferSource },
+      kek,
+      base64ToBytes(cached.wrappedKey) as unknown as BufferSource,
+    ),
   );
-  return crypto.subtle.importKey("raw", raw, { name: "AES-GCM", length: 256 }, false, [
-    "encrypt",
-    "decrypt",
-  ]);
+  return { key: await importAesKey(raw), raw };
+}
+
+/**
+ * Unwraps a cached blob, branching on how it is sealed. Returns null (rather
+ * than throwing) when the identity path cannot open the wrap.
+ */
+async function unwrapCached(
+  cached: CachedClinicKey,
+  password: string,
+): Promise<{ key: CryptoKey; raw: Uint8Array } | null> {
+  if (cached.wrapType === "identity") {
+    if (!cached.ephemeralPublicKey) return null;
+    const raw = await unwrapIdentityWrapRaw({
+      wrapped_key: cached.wrappedKey,
+      wrap_iv: cached.wrapIv,
+      ephemeral_public_key: cached.ephemeralPublicKey,
+    });
+    if (!raw) return null;
+    return { key: await importAesKey(raw), raw };
+  }
+  return unwrapWithPassphrase(cached, password);
+}
+
+function setUnlockedKey(opened: { key: CryptoKey; raw: Uint8Array }, epoch: number): void {
+  clinicKey = opened.key;
+  rawClinicKeyBytes = opened.raw;
+  clinicKeyEpoch = epoch;
+}
+
+function resetUnlockedKey(): void {
+  clinicKey = null;
+  clinicKeyEpoch = null;
+  rawClinicKeyBytes = null;
 }
 
 async function cache(entry: CachedClinicKey): Promise<void> {
@@ -105,7 +184,7 @@ export async function unlockClinicKey(
   if (options.online) {
     try {
       const remote = await api.getClinicKeyWrap();
-      await cache({
+      const entry: CachedClinicKey = {
         id: CACHE_ID,
         clinicId: remote.clinic_id,
         keyEpoch: remote.key_epoch,
@@ -113,10 +192,40 @@ export async function unlockClinicKey(
         wrapIv: remote.wrap_iv,
         kdfSalt: remote.kdf_salt,
         kdfIterations: remote.kdf_iterations,
+        wrapType: remote.wrap_type ?? "passphrase",
+        ephemeralPublicKey: remote.ephemeral_public_key ?? undefined,
         cachedAt: new Date().toISOString(),
-      });
+      };
+      if (entry.wrapType === "identity") {
+        // Open BEFORE caching: a failed identity unwrap must not leave a
+        // cached blob pretending this device holds the key.
+        const opened = await unwrapCached(entry, password);
+        if (!opened) {
+          resetUnlockedKey();
+          return { available: false, reason: IDENTITY_UNOPENABLE_REASON };
+        }
+        await cache(entry);
+        setUnlockedKey(opened, entry.keyEpoch);
+        return { available: true, reason: null };
+      }
+      await cache(entry);
     } catch (error) {
       if (error instanceof ApiError && error.status === 404) {
+        // A 404 says this account holds no wrap — not that the clinic has no
+        // key. If a colleague's wrap already exists, a key minted here would
+        // be a second, different key at the same epoch. Ask the clinic's
+        // status first: a clinic with no key gets one, everyone else waits
+        // for a share.
+        let clinicHasKey = false;
+        try {
+          clinicHasKey = (await api.getClinicKeyStatus()).key_epoch !== null;
+        } catch {
+          // Status unreadable: publish anyway and let the server's guard
+          // reject a second key for a clinic that already has one.
+        }
+        if (clinicHasKey) {
+          return { available: false, reason: WAITING_FOR_SHARE_REASON };
+        }
         const created = await publishNewClinicKey(password, options.userId);
         if (!created.published) return { available: false, reason: created.reason };
       } else if (error instanceof ApiError && error.status === 0) {
@@ -139,19 +248,19 @@ export async function unlockClinicKey(
         "No clinic key is available on this device yet. Records are still synchronized; server-side encryption is not active for this account.",
     };
   }
-  try {
-    clinicKey = await unwrap(cached, password);
-    clinicKeyEpoch = cached.keyEpoch;
-    return { available: true, reason: null };
-  } catch {
-    clinicKey = null;
-    clinicKeyEpoch = null;
+  const opened = await unwrapCached(cached, password).catch(() => null);
+  if (!opened) {
+    resetUnlockedKey();
     return {
       available: false,
       reason:
-        "The clinic key on this device could not be opened with this passphrase.",
+        cached.wrapType === "identity"
+          ? IDENTITY_UNOPENABLE_REASON
+          : "The clinic key on this device could not be opened with this passphrase.",
     };
   }
+  setUnlockedKey(opened, cached.keyEpoch);
+  return { available: true, reason: null };
 }
 
 /** Generates a clinic key and publishes it wrapped for the current user. */
@@ -195,11 +304,13 @@ async function publishNewClinicKey(
     // A clinician without permission to publish is a normal situation, not a
     // failure: an administrator's device creates the key.
     const reason =
-      error instanceof ApiError && error.status === 403
-        ? "This clinic has no encryption key yet, and this account may not create one. An administrator must sign in once."
-        : error instanceof Error
-          ? error.message
-          : "The clinic key could not be published.";
+      error instanceof ApiError && error.status === 409
+        ? WAITING_FOR_SHARE_REASON
+        : error instanceof ApiError && error.status === 403
+          ? "This clinic has no encryption key yet, and this account may not create one. An administrator must sign in once."
+          : error instanceof Error
+            ? error.message
+            : "The clinic key could not be published.";
     return { published: false, reason };
   }
 }
@@ -208,13 +319,20 @@ export function isClinicKeyAvailable(): boolean {
   return clinicKey !== null;
 }
 
+/**
+ * Raw clinic key bytes for sealing to a colleague's identity key. Null
+ * unless the clinic key is currently unlocked; never persisted.
+ */
+export async function currentRawClinicKey(): Promise<Uint8Array | null> {
+  return rawClinicKeyBytes;
+}
+
 export function currentKeyEpoch(): number | null {
   return clinicKeyEpoch;
 }
 
 export function lockClinicKey(): void {
-  clinicKey = null;
-  clinicKeyEpoch = null;
+  resetUnlockedKey();
 }
 
 export interface SealedContent {

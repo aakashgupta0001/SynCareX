@@ -14,6 +14,7 @@ import {
   FileText,
   LockKeyhole,
   Mic,
+  Play,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -29,11 +30,20 @@ import {
   observationRepository,
 } from "../repositories/consultationRepository";
 import { aiRepository, type DecryptedAIArtifact } from "../repositories/aiRepository";
+import { aiSummaryRepository } from "../repositories/aiSummaryRepository";
 import { patientRepository } from "../repositories/patientRepository";
-import { rankHistoryLines } from "../offline/historyRanking";
+import { rankHistoryEntries } from "../offline/historyRanking";
 import { buildCaseFile, CASE_FILE_REASON } from "../offline/caseFile";
 import type { LocalPatient } from "../database/types";
-import { localAIClient, type ExtractedFact, type LocalAIModel, type LocalAIStatus } from "../services/localAI";
+import {
+  localAIClient,
+  type ExtractedFact,
+  type LocalAIModel,
+  type LocalAIStatus,
+  type SummaryResponse,
+  type SummarySections,
+  type SummarySourceLine,
+} from "../services/localAI";
 
 const AUDIO_TYPES = ["audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg", "audio/webm", "audio/flac"];
 const DOCUMENT_TYPES = [
@@ -59,6 +69,26 @@ function textFrom(artifact: DecryptedAIArtifact): string {
   return typeof artifact.payload.text === "string" ? artifact.payload.text : "";
 }
 
+const SUMMARY_SECTION_LABELS: [keyof SummarySections, string][] = [
+  ["presenting_complaint", "Presenting complaint"],
+  ["relevant_history", "Relevant history"],
+  ["medications", "Medications"],
+  ["allergies", "Allergies"],
+  ["vitals", "Vitals"],
+  ["open_questions", "Open questions"],
+];
+
+/** Renders the structured summary as editable text with visible source IDs. */
+function renderSummarySections(sections: SummarySections): string {
+  return SUMMARY_SECTION_LABELS.map(([key, label]) => {
+    const points = sections[key] ?? [];
+    if (!points.length) return `${label}: —`;
+    return `${label}:\n${points
+      .map((point) => `- ${point.text} [${point.source_line_ids.join(", ")}]`)
+      .join("\n")}`;
+  }).join("\n\n");
+}
+
 export function AIWorkspacePage() {
   const [status, setStatus] = useState<LocalAIStatus | null>(null);
   const [models, setModels] = useState<LocalAIModel[]>([]);
@@ -78,6 +108,10 @@ export function AIWorkspacePage() {
   );
   const [ocrLanguage, setOcrLanguage] = useState("eng");
   const [sourceText, setSourceText] = useState("");
+  const [historyLines, setHistoryLines] = useState<SummarySourceLine[]>([]);
+  const [summarySections, setSummarySections] = useState<SummaryResponse | null>(null);
+  /** Object URL of a decrypted saved source, for in-page playback. */
+  const [playingSource, setPlayingSource] = useState<{ url: string; fileName: string } | null>(null);
   const [facts, setFacts] = useState<ExtractedFact[]>([]);
   const [acceptedFacts, setAcceptedFacts] = useState<Set<number>>(new Set());
   const [summary, setSummary] = useState("");
@@ -245,31 +279,63 @@ export function AIWorkspacePage() {
           allergyRepository.listByPatientLocal(patientId),
           medicationRepository.listByPatientLocal(patientId),
         ]);
-        const sourceLines = [
-          patient.relevantHistory && `Recorded history: ${patient.relevantHistory}`,
+        const historyEntries: SummarySourceLine[] = [
+          ...(patient.relevantHistory
+            ? [
+                {
+                  id: `patient:${patient.id}`,
+                  text: `Recorded history: ${patient.relevantHistory}`,
+                } satisfies SummarySourceLine,
+              ]
+            : []),
           ...allergies.filter((item) => !item.enteredInErrorAt).map(
             (item) =>
-              `Recorded allergy: ${item.substance}; reaction: ${item.reaction}; severity: ${item.severity}`,
+              ({
+                id: `allergy:${item.id}`,
+                text: `Recorded allergy: ${item.substance}; reaction: ${item.reaction}; severity: ${item.severity}`,
+              }) satisfies SummarySourceLine,
           ),
           ...medications.filter((item) => !item.enteredInErrorAt).map(
             (item) =>
-              `Recorded medication: ${item.name}; dose: ${item.dose}; frequency: ${item.frequency}`,
+              ({
+                id: `medication:${item.id}`,
+                text: `Recorded medication: ${item.name}; dose: ${item.dose}; frequency: ${item.frequency}`,
+              }) satisfies SummarySourceLine,
           ),
           ...observations.filter((item) => !item.enteredInErrorAt).map(
-            (item) => `Recorded observation (${item.recordedAt}): ${item.label} ${item.value} ${item.unit}`,
+            (item) =>
+              ({
+                id: `observation:${item.id}`,
+                text: `Recorded observation (${item.recordedAt}): ${item.label} ${item.value} ${item.unit}`,
+              }) satisfies SummarySourceLine,
           ),
-          ...notes.map((item) => `Clinical note (${item.noteType}): ${item.body}`),
+          ...notes.map(
+            (item) =>
+              ({
+                id: `note:${item.id}`,
+                text: `Clinical note (${item.noteType}): ${item.body}`,
+              }) satisfies SummarySourceLine,
+          ),
           ...consultations.map(
             (item) =>
-              `Consultation (${item.occurredAt}): ${item.reason}; notes: ${item.notes}`,
+              ({
+                id: `consultation:${item.id}`,
+                text: `Consultation (${item.occurredAt}): ${item.reason}; notes: ${item.notes}`,
+              }) satisfies SummarySourceLine,
           ),
-        ].filter((line): line is string => Boolean(line?.trim()));
+        ].filter((entry): entry is SummarySourceLine => Boolean(entry?.text.trim()));
         const term = historyQuery.trim();
         // Rank before applying the character budget, so the context sent to
         // the model is the most relevant history rather than whichever
-        // records happen to come first.
-        const ranked = rankHistoryLines(sourceLines, term, 12_000);
-        const matches = ranked.lines;
+        // records happen to come first. The lines keep their record IDs so
+        // the structured summary can cite exactly where each point came from.
+        const ranked = rankHistoryEntries(
+          historyEntries,
+          (entry) => entry.text,
+          term,
+          12_000,
+        );
+        const matches = ranked.entries;
         if (!matches.length) {
           setError(
             term
@@ -278,9 +344,9 @@ export function AIWorkspacePage() {
           );
           return;
         }
-        setSourceText(matches.join("\n"));
+        setHistoryLines(matches);
         setMessage(
-          `Loaded ${matches.length} of ${ranked.matched} matching item(s) for ${patient.fullName}, most relevant first.${ranked.truncated ? " Some matches did not fit the 12,000-character budget; narrow the search to include them." : ""} Review and edit the source before sending it to the local AI engine.`,
+          `Loaded ${matches.length} of ${ranked.matched} matching item(s) for ${patient.fullName}, most relevant first. History stays in its own box below; the transcript box is untouched.${ranked.truncated ? " Some matches did not fit the 12,000-character budget; narrow the search to include them." : ""}`,
         );
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Local patient history could not be read.");
@@ -382,17 +448,25 @@ export function AIWorkspacePage() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!sourceText.trim()) {
+    if (!sourceText.trim() && !historyLines.length) {
       setError("Add or load source text before extracting facts.");
       return;
     }
     setBusy("extraction");
     try {
+      // The transcript box and the retrieved-history box stay separate on
+      // screen, but extraction still sees both as its source.
+      const extractionInput = [
+        sourceText.trim(),
+        ...historyLines.map((line) => line.text),
+      ]
+        .filter(Boolean)
+        .join("\n");
       const source = await aiRepository.saveArtifact("transcript", {
-        text: sourceText,
+        text: extractionInput,
         source_kind: "clinician-provided",
       });
-      const result = await localAIClient.extract(sourceText, extractionModel, token);
+      const result = await localAIClient.extract(extractionInput, extractionModel, token);
       const extraction = await aiRepository.saveArtifact(
         "extraction",
         {
@@ -583,6 +657,86 @@ export function AIWorkspacePage() {
     setError("");
   }
 
+  /**
+   * Machine-generated structured summary (RAG-lite): the transcript plus the
+   * lexically ranked history lines, with every point citing the record IDs it
+   * came from. Output is unverified until a clinician reviews it.
+   */
+  async function generateStructuredSummary() {
+    setError("");
+    setMessage("");
+    if (!sourceText.trim() && !historyLines.length) {
+      setError("Load patient history or paste a transcript before generating a summary.");
+      return;
+    }
+    if (!token.trim()) {
+      setError("Enter the local AI engine token before generating a summary.");
+      return;
+    }
+    setBusy("summary");
+    try {
+      const result = await localAIClient.summarize(
+        sourceText,
+        historyLines,
+        extractionModel,
+        token,
+      );
+      setSummarySections(result);
+      setMessage(
+        "Structured summary was generated locally from the transcript and cited history lines. Every point names the records it came from; verify each one before saving.",
+      );
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Summary generation failed.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /**
+   * Decrypts a saved audio/document source for in-page playback or download.
+   * The bytes only exist encrypted at rest; they are decrypted here, in
+   * memory, for exactly as long as the clip is playing or downloading.
+   */
+  async function openSourceFile(
+    artifact: DecryptedAIArtifact,
+    mode: "play" | "download",
+  ) {
+    setError("");
+    try {
+      const source = await aiRepository.openSource(artifact.id);
+      if (!source) {
+        setError("The saved file could not be opened on this device.");
+        return;
+      }
+      const url = URL.createObjectURL(source.blob);
+      if (mode === "play") {
+        setPlayingSource((current) => {
+          if (current) URL.revokeObjectURL(current.url);
+          return { url, fileName: source.fileName };
+        });
+        return;
+      }
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = source.fileName;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The saved file could not be opened.",
+      );
+    }
+  }
+
+  function closePlayingSource() {
+    setPlayingSource((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
+    });
+  }
+
   async function saveSummary() {
     if (!summary.trim()) return;
     try {
@@ -590,9 +744,32 @@ export function AIWorkspacePage() {
         text: summary.trim(),
         source_id: selectedArtifact?.id ?? null,
         clinician_edited: true,
+        sections: summarySections,
       });
       setSelectedArtifact(saved);
-      setMessage("Editable source-linked summary saved encrypted on this device.");
+      // The artifact stays device-only; the summary itself is clinical
+      // content and synchronizes like any hand-entered record — but only
+      // when it is attached to a patient. Raw audio never leaves the device.
+      if (patientId) {
+        await aiSummaryRepository.createLocal({
+          patientId,
+          text: summary.trim(),
+          sourceArtifactId: selectedArtifact?.id ?? null,
+          sections: summarySections
+            ? Object.entries(summarySections).map(([section, points]) => ({
+                section,
+                points: points as Array<{ text: string; source_line_ids: string[] }>,
+              }))
+            : null,
+        });
+        setMessage(
+          "Summary saved encrypted on this device and queued to synchronize with the patient's record.",
+        );
+      } else {
+        setMessage(
+          "Summary saved encrypted on this device. Select the patient in the history section, then save again to synchronize it with their record.",
+        );
+      }
       await reload();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Summary could not be saved.");
@@ -617,7 +794,14 @@ export function AIWorkspacePage() {
       setFacts([]);
       setAcceptedFacts(new Set());
     }
-    if (artifact.kind === "summary" && text) setSummary(text);
+    if (artifact.kind === "summary" && text) {
+      setSummary(text);
+      setSummarySections(
+        artifact.payload.sections && typeof artifact.payload.sections === "object"
+          ? (artifact.payload.sections as SummaryResponse)
+          : null,
+      );
+    }
   }
 
   const runtimeNames = status
@@ -913,6 +1097,19 @@ export function AIWorkspacePage() {
         ) : (
           <EmptyState title="No local patients" description="Patient history retrieval is available after records have been saved on this device." />
         )}
+        {historyLines.length > 0 && (
+          <label className="form-field">
+            <span>
+              Retrieved history ({historyLines.length} line(s), most relevant first) — kept
+              separate from the transcript; each line's ID is what the structured summary cites
+            </span>
+            <textarea
+              readOnly
+              rows={6}
+              value={historyLines.map((line) => `[${line.id}] ${line.text}`).join("\n")}
+            />
+          </label>
+        )}
       </section>
 
       <section className="content-card ai-extraction">
@@ -950,8 +1147,52 @@ export function AIWorkspacePage() {
             <button className="button button-primary" disabled={busy !== ""} type="submit">
               {busy === "extraction" ? "Extracting locally..." : "Extract facts for review"}
             </button>
+            <button
+              className="button button-secondary"
+              disabled={busy !== ""}
+              onClick={() => void generateStructuredSummary()}
+              type="button"
+            >
+              {busy === "summary" ? "Summarizing locally..." : "Generate structured summary"}
+            </button>
           </div>
         </form>
+        {summarySections && (
+          <div className="ai-review-list">
+            <div className="ai-review-heading">
+              <strong>Structured summary (machine-generated)</strong>
+              <span>Every point cites the record IDs it came from; verify each one</span>
+            </div>
+            <dl className="ai-summary-sections">
+              {SUMMARY_SECTION_LABELS.map(([key, label]) => {
+                const points = summarySections[key] ?? [];
+                return (
+                  <div key={key}>
+                    <dt>{label}</dt>
+                    <dd>
+                      {points.length ? (
+                        points.map((point, index) => (
+                          <span className="ai-summary-point" key={index}>
+                            {point.text} <small>[{point.source_line_ids.join(", ")}]</small>
+                          </span>
+                        ))
+                      ) : (
+                        <small>Nothing grounded in the source for this section.</small>
+                      )}
+                    </dd>
+                  </div>
+                );
+              })}
+            </dl>
+            <button
+              className="button button-quiet"
+              onClick={() => setSummary(renderSummarySections(summarySections))}
+              type="button"
+            >
+              Copy into editable draft
+            </button>
+          </div>
+        )}
         {facts.length > 0 && (
           <div className="ai-review-list">
             <div className="ai-review-heading">
@@ -1020,26 +1261,70 @@ export function AIWorkspacePage() {
           <LoadingState label="Loading encrypted AI artifacts..." />
         ) : artifacts.length ? (
           <div className="ai-artifact-list">
-            {artifacts.map((artifact) => (
-              <button
-                className={`ai-artifact-row${selectedArtifact?.id === artifact.id ? " ai-artifact-active" : ""}`}
-                key={artifact.id}
-                onClick={() => void openArtifact(artifact)}
-                type="button"
-              >
-                <span className="ai-artifact-icon"><FileText size={16} /></span>
-                <span>
-                  <strong>{kindLabel(artifact.kind)}</strong>
-                  <small>{new Date(artifact.updatedAt).toLocaleString()}</small>
-                </span>
-                <span className={`ai-artifact-status ai-status-${artifact.status}`}>
-                  {artifact.status.replaceAll("_", " ")}
-                </span>
-                {typeof artifact.payload.text === "string" && (
-                  <span className="ai-artifact-preview">{artifact.payload.text.slice(0, 100)}</span>
-                )}
-              </button>
-            ))}
+            {playingSource && (
+              <div className="ai-source-player" role="region" aria-label="Saved source playback">
+                <span className="ai-source-player-name">{playingSource.fileName}</span>
+                {/* key forces a fresh element per URL, so switching sources restarts cleanly */}
+                <audio controls autoPlay key={playingSource.url} src={playingSource.url} />
+                <button
+                  className="button button-quiet"
+                  onClick={closePlayingSource}
+                  type="button"
+                >
+                  Close player
+                </button>
+              </div>
+            )}
+            {artifacts.map((artifact) => {
+              const isSource = artifact.kind === "audio_source" || artifact.kind === "document_source";
+              return (
+                <div className="ai-artifact-item" key={artifact.id}>
+                  <button
+                    className={`ai-artifact-row${selectedArtifact?.id === artifact.id ? " ai-artifact-active" : ""}`}
+                    onClick={() => void openArtifact(artifact)}
+                    type="button"
+                  >
+                    <span className="ai-artifact-icon"><FileText size={16} /></span>
+                    <span>
+                      <strong>{kindLabel(artifact.kind)}</strong>
+                      <small>{new Date(artifact.updatedAt).toLocaleString()}</small>
+                    </span>
+                    <span className={`ai-artifact-status ai-status-${artifact.status}`}>
+                      {artifact.status.replaceAll("_", " ")}
+                    </span>
+                    {typeof artifact.payload.text === "string" && (
+                      <span className="ai-artifact-preview">{artifact.payload.text.slice(0, 100)}</span>
+                    )}
+                  </button>
+                  {isSource && (
+                    <span className="ai-artifact-actions">
+                      {artifact.kind === "audio_source" && (
+                        <button
+                          aria-label={`Play saved audio from ${new Date(artifact.updatedAt).toLocaleString()}`}
+                          className="button button-quiet"
+                          disabled={busy !== ""}
+                          onClick={() => void openSourceFile(artifact, "play")}
+                          title="Decrypt and play on this device"
+                          type="button"
+                        >
+                          <Play size={15} /> Play
+                        </button>
+                      )}
+                      <button
+                        aria-label={`Download the saved ${artifact.kind === "audio_source" ? "audio" : "document"} file`}
+                        className="button button-quiet"
+                        disabled={busy !== ""}
+                        onClick={() => void openSourceFile(artifact, "download")}
+                        title="Decrypt and download the original file"
+                        type="button"
+                      >
+                        <Download size={15} /> Download
+                      </button>
+                    </span>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <EmptyState title="No local AI work yet" description="Saved audio, OCR and review artifacts will appear here." />

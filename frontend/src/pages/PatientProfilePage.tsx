@@ -3,10 +3,13 @@ import {
   ArrowLeft,
   Archive,
   CalendarDays,
+  Check,
   ClipboardPlus,
+  Copy,
   Edit3,
   FileText,
   IdCard,
+  KeyRound,
   MapPin,
   Phone,
   Save,
@@ -39,7 +42,11 @@ import {
 import { documentRepository } from "../repositories/documentRepository";
 import { syncRepository, type RecordSyncState } from "../repositories/syncRepository";
 import { formatBytes } from "../offline/storage";
-import { api, mapPatientFromApi } from "../services/api";
+import {
+  api,
+  mapPatientFromApi,
+  type PatientPortalAccountStatusResponse,
+} from "../services/api";
 import { useAuth } from "../services/auth";
 import { useConnectivityState } from "../hooks/useConnectivity";
 
@@ -85,6 +92,15 @@ export function PatientProfilePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+
+  // Patient portal account (staff-issued enrollment).
+  const [portalAccount, setPortalAccount] =
+    useState<PatientPortalAccountStatusResponse | null>(null);
+  const [portalEmail, setPortalEmail] = useState("");
+  const [portalCode, setPortalCode] = useState<string | null>(null);
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [portalError, setPortalError] = useState("");
+  const [portalCopied, setPortalCopied] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -139,6 +155,84 @@ export function PatientProfilePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Portal account lookup: 404 (no account yet) is a normal answer and any
+  // other failure stays silent so the clinical record remains usable offline.
+  useEffect(() => {
+    if (!apiUsable) return;
+    let cancelled = false;
+    api
+      .getPatientPortalAccount(patientId)
+      .then((account) => {
+        if (!cancelled) setPortalAccount(account);
+      })
+      .catch(() => {
+        if (!cancelled) setPortalAccount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiUsable, patientId]);
+
+  async function enablePortal(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPortalBusy(true);
+    setPortalError("");
+    setPortalCopied(false);
+    try {
+      const account = await api.createPatientPortalAccount(
+        patientId,
+        portalEmail.trim(),
+      );
+      setPortalCode(account.enrollment_code);
+      setPortalAccount({
+        email: account.email,
+        enrolled: false,
+        is_active: true,
+        created_at: account.enrollment_code_expires_at,
+      });
+      setPortalEmail("");
+    } catch (reason) {
+      setPortalError(
+        reason instanceof Error
+          ? reason.message
+          : "The portal account could not be created.",
+      );
+    } finally {
+      setPortalBusy(false);
+    }
+  }
+
+  async function copyEnrollmentCode() {
+    if (!portalCode) return;
+    try {
+      await navigator.clipboard.writeText(portalCode);
+      setPortalCopied(true);
+      setTimeout(() => setPortalCopied(false), 2_000);
+    } catch {
+      // Clipboard unavailable (permissions); the code stays visible.
+    }
+  }
+
+  /** A fresh one-time code when the patient lost the first one. */
+  async function reissueEnrollmentCode() {
+    setPortalBusy(true);
+    setPortalError("");
+    setPortalCopied(false);
+    try {
+      const account = await api.reissuePortalEnrollmentCode(patientId);
+      setPortalCode(account.enrollment_code);
+      setPortalAccount((current) =>
+        current ? { ...current, enrolled: false } : current,
+      );
+    } catch (reason) {
+      setPortalError(
+        reason instanceof Error ? reason.message : "The code could not be reissued.",
+      );
+    } finally {
+      setPortalBusy(false);
+    }
+  }
 
   async function addIdentifier(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -983,6 +1077,90 @@ export function PatientProfilePage() {
           )}
         </section>
       </div>
+
+      <section className="content-card">
+        <div className="section-heading">
+          <div>
+            <h2>Patient portal</h2>
+            <p>
+              Give the patient read-only access to a summary of their own
+              record.
+            </p>
+          </div>
+          <KeyRound size={16} aria-hidden="true" />
+        </div>
+        {portalCode && (
+          <>
+            <div className="portal-code-box" role="status">
+              <div>
+                <span>Enrollment code</span>
+                <code>{portalCode}</code>
+              </div>
+              <button
+                className="button button-quiet"
+                onClick={() => void copyEnrollmentCode()}
+                type="button"
+              >
+                {portalCopied ? <Check size={15} /> : <Copy size={15} />}
+                {portalCopied ? "Copied" : "Copy"}
+              </button>
+            </div>
+            <p className="detail-muted portal-code-note">
+              Shown once. Give it to the patient along with this email.
+            </p>
+          </>
+        )}
+        {portalError && (
+          <div className="form-error" role="alert">
+            {portalError}
+          </div>
+        )}
+        <form onSubmit={(event) => void enablePortal(event)}>
+          <div className="form-grid portal-enable-grid">
+            <label className="form-field">
+              <span>Patient email</span>
+              <input
+                maxLength={254}
+                onChange={(event) => setPortalEmail(event.target.value)}
+                placeholder="patient@example.com"
+                required
+                type="email"
+                value={portalEmail}
+              />
+            </label>
+          </div>
+          <div className="form-actions">
+            <button className="button button-secondary" disabled={portalBusy} type="submit">
+              <KeyRound size={15} />
+              {portalBusy ? "Creating account..." : "Enable patient portal"}
+            </button>
+          </div>
+        </form>
+        {portalAccount ? (
+          <div className="detail-block">
+            <span>Portal account</span>
+            <p>
+              {portalAccount.email} ·{" "}
+              {portalAccount.enrolled
+                ? "Enrolled"
+                : "Awaiting enrollment (code not yet used)"}
+              {portalAccount.is_active ? " · Active" : " · Inactive"}
+            </p>
+            {!portalAccount.enrolled && (
+              <button
+                className="button button-quiet"
+                disabled={portalBusy}
+                onClick={() => void reissueEnrollmentCode()}
+                type="button"
+              >
+                <KeyRound size={14} /> Reissue enrollment code
+              </button>
+            )}
+          </div>
+        ) : (
+          <p className="detail-muted">No portal account for this patient yet.</p>
+        )}
+      </section>
 
       {!patient.archivedAt && (
         <div className="danger-row">

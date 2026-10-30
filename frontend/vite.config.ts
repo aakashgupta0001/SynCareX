@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 import { VitePWA } from "vite-plugin-pwa";
 
 /**
@@ -9,8 +10,24 @@ import { VitePWA } from "vite-plugin-pwa";
  */
 const CACHE_VERSION = "v2";
 
-export default defineConfig({
+// The refresh cookie is SameSite=Strict, so the browser only sends it on
+// same-origin requests. Proxying /api to the backend keeps dev (5173) and
+// the production preview (4173) same-origin with the API.
+const apiProxyTarget = process.env.VITE_API_PROXY_TARGET ?? "http://127.0.0.1:8000";
+const apiProxy = {
+  "/api": { target: apiProxyTarget, changeOrigin: true },
+  "/health": { target: apiProxyTarget, changeOrigin: true },
+};
+
+export default defineConfig(({ mode }) => ({
+  // `npm run dev:https` serves with a self-signed certificate so phones and
+  // tablets on the LAN get a secure context — without it the browser
+  // disables crypto.subtle and the vault cannot unlock at all.
+  https: mode === "https",
+  server: { proxy: apiProxy },
+  preview: { proxy: apiProxy },
   plugins: [
+    ...(mode === "https" ? [basicSsl()] : []),
     react(),
     tailwindcss(),
     VitePWA({
@@ -88,4 +105,4 @@ export default defineConfig({
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
     exclude: ["node_modules", "dist", "e2e"],
   },
-});
+}));

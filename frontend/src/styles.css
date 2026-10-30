@@ -340,6 +340,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-row strong { color: #40564f; font-size: 10px; }
 .settings-row small { margin-top: 4px; color: #84928d; font-size: 9px; }
 .settings-value { font-size: 9px; white-space: nowrap; }
+.restore-controls { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.restore-controls input[type='file'] { max-width: 150px; font-size: 9px; color: #5b776e; }
+.restore-controls input[type='password'] { min-height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 7px; color: #344b45; background: #fff; font-size: 10px; width: 130px; }
 .text-positive { color: #328052; }
 .text-warning { color: #9a6714; }
 .device-code { color: #5b776e; font-size: 9px; }
@@ -575,7 +578,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .ai-summary-field { display: flex; margin: 15px 0 10px; flex-direction: column; gap: 6px; }
 .ai-summary-field span { color: #536660; font-size: 10px; font-weight: 650; }
 .ai-summary-field textarea { width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 8px; resize: vertical; }
+.ai-summary-sections { margin: 0; display: flex; flex-direction: column; gap: 9px; }
+.ai-summary-sections dt { color: #536660; font-size: 10px; font-weight: 650; }
+.ai-summary-sections dd { margin: 3px 0 0; display: flex; flex-direction: column; gap: 4px; color: #28423d; font-size: 10px; line-height: 1.5; }
+.ai-summary-point small { color: #9a610a; font-size: 9px; }
 .ai-artifact-row { display: grid; grid-template-columns: 32px minmax(110px, .7fr) auto minmax(140px, 1fr); align-items: center; gap: 10px; padding: 11px 2px; border: 0; border-top: 1px solid #edf1ef; text-align: left; background: transparent; cursor: pointer; }
+.ai-artifact-item { display: flex; align-items: center; gap: 8px; }
+.ai-artifact-item .ai-artifact-row { flex: 1; }
+.ai-artifact-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ai-source-player { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 2px; border-bottom: 1px solid #edf1ef; }
+.ai-source-player audio { height: 36px; }
+.ai-source-player-name { font-size: 11px; font-weight: 650; color: #28423d; }
 .ai-artifact-row:hover, .ai-artifact-active { background: #f7faf9; }
 .ai-artifact-icon { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 8px; color: var(--teal); background: #e9f5f2; }
 .ai-artifact-row strong, .ai-artifact-row small { display: block; text-transform: capitalize; }
@@ -642,4 +655,181 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .integrity-card-heading { flex-wrap: wrap; }
   .integrity-card-heading time { width: 100%; margin-left: 0; }
   .integrity-review .form-actions { align-items: stretch; flex-direction: column; }
+}
+
+/* Patient portal (public, outside the staff workspace shell). */
+.portal-page {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+  align-items: center;
+  gap: 15px;
+  padding: 44px 20px 60px;
+  background: #f5f8f7;
+}
+.portal-panel {
+  width: min(100%, 430px);
+  display: flex;
+  flex-direction: column;
+  padding: 26px;
+}
+.portal-wide {
+  width: min(100%, 860px);
+  align-items: stretch;
+}
+.portal-page h1 {
+  margin: 14px 0 7px;
+  color: var(--navy);
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -.04em;
+}
+.portal-subtitle {
+  margin: 0 0 14px;
+  color: #71827e;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.portal-page input {
+  min-height: 41px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: #243b37;
+  font-size: 11px;
+}
+.portal-page input:focus {
+  border-color: #80b8ae;
+  box-shadow: 0 0 0 3px rgb(15 118 110 / 8%);
+  outline: 0;
+}
+.portal-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--navy);
+  font-size: 12px;
+  font-weight: 650;
+}
+.portal-brand-mark {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 9px;
+  color: #0f766e;
+  background: #e6f4f0;
+}
+.portal-submit {
+  width: 100%;
+  margin-top: 17px;
+}
+.portal-switch {
+  align-self: flex-start;
+  margin-top: 14px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.portal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 13px;
+  width: min(100%, 860px);
+}
+.portal-patient-card {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 20px;
+}
+.portal-patient-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.portal-patient-identity h1 {
+  margin: 0;
+  font-size: 20px;
+}
+.portal-patient-identity small {
+  display: block;
+  margin-top: 4px;
+  color: #71827e;
+  font-size: 10px;
+}
+.portal-patient-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 17px;
+  color: #536660;
+  font-size: 10px;
+}
+.portal-patient-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.portal-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: #7d8d88;
+  font-size: 10px;
+}
+.portal-page .content-card {
+  padding: 20px;
+}
+.portal-page .note-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.portal-page .note-entry strong {
+  color: #263d39;
+  font-size: 11px;
+}
+.portal-page .note-entry p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+/* Staff-side patient portal enrollment card (patient profile). */
+.portal-code-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 7px;
+  padding: 12px 14px;
+  border: 1px solid #cde8d8;
+  border-radius: 10px;
+  background: #f0faf3;
+}
+.portal-code-box span {
+  display: block;
+  color: #58716b;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: .08em;
+}
+.portal-code-box code {
+  display: block;
+  margin-top: 4px;
+  color: #14532d;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  word-break: break-all;
+}
+.portal-code-note {
+  margin: 0 0 13px;
+}
+.portal-enable-grid {
+  grid-template-columns: minmax(0, 1fr);
 }

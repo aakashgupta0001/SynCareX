@@ -3,10 +3,15 @@ import { db } from "../database/db";
 import type {
   EncryptedRecord,
   EntityType,
+  LocalDocument,
   SyncConflict,
 } from "../database/types";
 import type { SyncChangeResponse } from "../services/api";
-import { encryptLocalValue, requireUnlockedIdentity } from "../security/localVault";
+import {
+  decryptLocalValue,
+  encryptLocalValue,
+  requireUnlockedIdentity,
+} from "../security/localVault";
 import { auditRepository } from "./auditRepository";
 
 const tableNames: Record<EntityType, string> = {
@@ -22,6 +27,7 @@ const tableNames: Record<EntityType, string> = {
   followup: "followUps",
   passport: "passports",
   transfer: "transfers",
+  aiSummary: "aiSummaries",
 };
 
 function camelCase(value: string): string {
@@ -79,6 +85,11 @@ function mapSnapshot(
     snapshot.enteredInErrorAt = snapshot.enteredInErrorAt ?? null;
     snapshot.enteredInErrorBy = snapshot.enteredInErrorBy ?? null;
     snapshot.enteredInErrorReason = snapshot.enteredInErrorReason ?? null;
+  } else if (type === "aiSummary") {
+    snapshot.authorId = snapshot.authorId ?? null;
+    snapshot.sourceArtifactId = snapshot.sourceArtifactId ?? null;
+    snapshot.sections = snapshot.sections ?? null;
+    snapshot.clinicianEdited = snapshot.clinicianEdited ?? true;
   }
   return snapshot;
 }
@@ -162,13 +173,35 @@ export const syncPullRepository = {
     }
 
     const prepared = await Promise.all(
-      changes.map(async (change) => ({
-        change,
-        snapshot: mapSnapshot(change.entity_type as EntityType, change),
-        encrypted: await encryptLocalValue(
-          mapSnapshot(change.entity_type as EntityType, change),
-        ),
-      })),
+      changes.map(async (change) => {
+        const entityType = change.entity_type as EntityType;
+        const snapshot = mapSnapshot(entityType, change);
+        if (entityType === "document") {
+          // A pulled document snapshot carries no device-local upload
+          // state. Keep this device's chunked upload session id (and any
+          // in-flight status) so an interrupted large upload still resumes
+          // after a restart instead of starting from byte zero.
+          const existing = await db.documents.get(change.entity_id);
+          if (existing && existing.ownerId === ownerId) {
+            const local = await decryptLocalValue<LocalDocument | null>(
+              existing.encrypted,
+            );
+            if (snapshot.uploadStatus === "uploaded") {
+              snapshot.uploadId = null;
+            } else if (local?.uploadId) {
+              snapshot.uploadId = local.uploadId;
+              snapshot.uploadStatus = local.uploadStatus;
+              snapshot.uploadError = local.uploadError;
+              snapshot.uploadedAt = local.uploadedAt;
+            }
+          }
+        }
+        return {
+          change,
+          snapshot,
+          encrypted: await encryptLocalValue(snapshot),
+        };
+      }),
     );
     const conflictIds: string[] = [];
     let applied = 0;
@@ -187,6 +220,7 @@ export const syncPullRepository = {
       db.allergies,
       db.medications,
       db.documents,
+      db.aiSummaries,
       db.syncOperations,
       db.syncConflicts,
       db.localSettings,

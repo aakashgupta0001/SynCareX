@@ -12,6 +12,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { IntegrityPage } from "./pages/IntegrityPage";
 import { PassportPage } from "./pages/PassportPage";
 import { PatientFormPage } from "./pages/PatientFormPage";
+import { PatientPortalPage } from "./pages/PatientPortalPage";
 import { PatientProfilePage } from "./pages/PatientProfilePage";
 import { PatientsPage } from "./pages/PatientsPage";
 import { ReferralsPage } from "./pages/ReferralsPage";
@@ -33,6 +34,9 @@ export default function App() {
         path="/login"
         element={session ? <Navigate to="/" replace /> : <LoginPage />}
       />
+      {/* Public patient portal: mounted beside the staff shell so it needs no
+          staff sign-in and shows no staff navigation. */}
+      <Route path="/portal" element={<PatientPortalPage />} />
       <Route element={<ProtectedWorkspace />}>
         <Route index element={<DashboardPage />} />
         <Route path="ai" element={<AIWorkspacePage />} />

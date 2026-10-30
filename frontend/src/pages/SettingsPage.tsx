@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Database,
   Download,
@@ -6,8 +6,11 @@ import {
   KeyRound,
   Laptop,
   LockKeyhole,
+  Share2,
   ShieldCheck,
   Smartphone,
+  Upload,
+  Users,
 } from "lucide-react";
 import { ErrorState } from "../components/StatePanel";
 import { PageHeader } from "../components/PageHeader";
@@ -18,8 +21,11 @@ import {
   requestPersistentStorage,
   type StorageReport,
 } from "../offline/storage";
-import { exportLocalBackup } from "../offline/backup";
+import { exportLocalBackup, importLocalBackup } from "../offline/backup";
 import { useAuth } from "../services/auth";
+import { api, type ClinicMemberResponse } from "../services/api";
+import { currentKeyEpoch } from "../security/clinicKey";
+import { wrapForRecipient } from "../security/identityKey";
 import { useConnectivityState } from "../hooks/useConnectivity";
 import type { LocalDevice } from "../database/types";
 
@@ -32,6 +38,66 @@ export function SettingsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [restorePassphrase, setRestorePassphrase] = useState("");
+  const restoreFileRef = useRef<HTMLInputElement>(null);
+  const canManageUsers = session?.permissions.includes("users.manage") ?? false;
+  const [members, setMembers] = useState<ClinicMemberResponse[] | null>(null);
+
+  const loadMembers = useCallback(async () => {
+    if (!canManageUsers) return;
+    try {
+      setMembers(await api.getClinicMembers());
+    } catch (reason) {
+      setMembers([]);
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The clinic members could not be listed.",
+      );
+    }
+  }, [canManageUsers]);
+
+  useEffect(() => {
+    void loadMembers();
+  }, [loadMembers]);
+
+  async function shareClinicKey(member: ClinicMemberResponse) {
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const identity = await api.getIdentityKey(member.id);
+      const wrap = await wrapForRecipient(identity.public_key);
+      if (!wrap) {
+        throw new Error(
+          "The clinic key is not unlocked on this device, so it cannot be shared. " +
+            "Unlock it (sign in with the passphrase that holds the clinic key) and try again.",
+        );
+      }
+      await api.publishClinicKeyWraps([
+        {
+          user_id: member.id,
+          key_epoch: currentKeyEpoch() ?? 1,
+          wrapped_key: wrap.wrapped_key,
+          wrap_iv: wrap.wrap_iv,
+          wrap_type: "identity",
+          ephemeral_public_key: wrap.ephemeral_public_key,
+        },
+      ]);
+      setMessage(
+        `Shared the clinic key with ${member.full_name || member.email}. They will receive it the next time this device synchronizes.`,
+      );
+      await loadMembers();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : `The clinic key could not be shared with ${member.full_name || member.email}.`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -66,6 +132,45 @@ export function SettingsPage() {
         : "The browser did not grant persistent storage. Data may be evicted under storage pressure; synchronize regularly.",
     );
     setBusy(false);
+  }
+
+  async function restoreBackup() {
+    const file = restoreFileRef.current?.files?.[0];
+    if (!file) {
+      setError("Choose a SynCareX backup file to restore first.");
+      return;
+    }
+    if (!restorePassphrase) {
+      setError("Enter the vault passphrase the backup was encrypted with.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(await file.text());
+      } catch {
+        throw new Error("The selected file is not valid JSON and cannot be a SynCareX backup.");
+      }
+      const result = await importLocalBackup(payload, restorePassphrase);
+      const details = Object.entries(result.tables)
+        .filter(([, summary]) => summary.imported > 0)
+        .map(([name, summary]) => `${name}: ${summary.imported}`)
+        .join(", ");
+      setMessage(
+        `Restored ${result.imported} record(s); ${result.skipped} newer local record(s) kept as-is.${details ? ` Imported into ${details}.` : ""}`,
+      );
+      setRestorePassphrase("");
+      if (restoreFileRef.current) restoreFileRef.current.value = "";
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "The backup could not be restored.",
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function exportBackup() {
@@ -159,6 +264,73 @@ export function SettingsPage() {
           </span>
         </div>
       </section>
+
+      {canManageUsers && (
+        <section className="content-card settings-card">
+          <div className="section-heading">
+            <div>
+              <h2>Share clinic key</h2>
+              <p>
+                Seal this clinic's encryption key to a colleague's identity key.
+                Their passphrase is never needed and never seen.
+              </p>
+            </div>
+            <span className="settings-icon">
+              <Share2 size={18} />
+            </span>
+          </div>
+          {(members ?? []).length === 0 && (
+            <div className="settings-row">
+              <span className="settings-icon">
+                <Users size={18} />
+              </span>
+              <span>
+                <strong>No clinic members to share with</strong>
+                <small>
+                  {members === null
+                    ? "Loading clinic members…"
+                    : "The server returned no other members for this clinic."}
+                </small>
+              </span>
+            </div>
+          )}
+          {(members ?? []).map((member) => (
+            <div className="settings-row" key={member.id}>
+              <span className="settings-icon">
+                <Users size={18} />
+              </span>
+              <span>
+                <strong>{member.full_name || member.email}</strong>
+                <small>
+                  {member.holds_clinic_key
+                    ? "Already holds the clinic key"
+                    : "No clinic key yet"}
+                  {" · "}
+                  {member.has_identity_key
+                    ? "Identity key published"
+                    : "No identity key published"}
+                </small>
+              </span>
+              {!member.holds_clinic_key &&
+              member.has_identity_key &&
+              member.id !== session?.user.id ? (
+                <button
+                  className="button button-quiet"
+                  disabled={busy}
+                  onClick={() => void shareClinicKey(member)}
+                  type="button"
+                >
+                  Share key
+                </button>
+              ) : (
+                <span className="settings-value">
+                  {member.id === session?.user.id ? "You" : "—"}
+                </span>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
 
       <section className="content-card settings-card">
         <div className="section-heading">
@@ -281,6 +453,45 @@ export function SettingsPage() {
           >
             Export backup
           </button>
+        </div>
+        <div className="settings-row">
+          <span className="settings-icon">
+            <Upload size={18} />
+          </span>
+          <span>
+            <strong>Restore backup</strong>
+            <small>
+              Merges an exported backup back into this device. Records that are newer here are
+              kept, and the file's passphrase must match this vault.
+            </small>
+          </span>
+          <span className="restore-controls">
+            <input
+              accept="application/json,.json"
+              aria-label="Backup file"
+              disabled={busy}
+              onChange={() => setError("")}
+              ref={restoreFileRef}
+              type="file"
+            />
+            <input
+              aria-label="Vault passphrase"
+              autoComplete="current-password"
+              disabled={busy}
+              onChange={(event) => setRestorePassphrase(event.target.value)}
+              placeholder="Vault passphrase"
+              type="password"
+              value={restorePassphrase}
+            />
+            <button
+              className="button button-quiet"
+              disabled={busy}
+              onClick={() => void restoreBackup()}
+              type="button"
+            >
+              Restore
+            </button>
+          </span>
         </div>
       </section>
 

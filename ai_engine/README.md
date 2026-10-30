@@ -3,8 +3,11 @@
 The local engine is separate from the SynCareX API. It binds to `127.0.0.1`
 only, does not call a hosted AI service, and does not download anything during
 startup. The browser stores source audio/images and results in encrypted
-IndexedDB before any local-engine request. AI artifacts remain local and are
-not synchronized or inserted into clinical notes automatically.
+IndexedDB before any local-engine request. AI artifacts stay on the device
+that produced them, with two deliberate exceptions: a clinician-reviewed AI
+summary synchronizes as its own `aiSummary` entity, and accepted facts reach
+the record through the reviewed case file. Raw audio never leaves the device,
+and nothing is inserted into clinical notes automatically.
 
 ## Start the engine
 
@@ -55,6 +58,11 @@ No model binary is committed or included in the PWA.
   OGG and FLAC are read directly.
   Mixed Hindi-English (Hinglish) uses automatic language detection and has not
   been accuracy-validated.
+- Accuracy is measured with the golden-set harness in `evals/` (WER for
+  speech, CER for OCR, fact precision/recall for extraction — see
+  `evals/README.md`). Numbers only count once `run_evals` produces them on
+  real hardware; low-end device timings use the same directory's Android
+  procedure plus the 4x-CPU-throttled Playwright spec.
 - OCR accepts PNG, JPEG, TIFF, WebP, camera captures, and PDFs up to 10 pages.
   PDF pages are rendered one at a time by Poppler at a bounded image size.
   Tesseract 5 uses adaptive Sauvola thresholding; printed text is best supported.

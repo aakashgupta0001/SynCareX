@@ -1,0 +1,15 @@
+{"id": "doc-en-001", "file": "doc-en-001.png", "language": "en", "reference_text": "SynCareX Clinic\nPatient: Amara Cipher\nAge: 34\nComplaint: fever, body ache\nAdvice: paracetamol 500 mg TDS", "kind": "printed", "status": "ok"}
+{"id": "doc-en-002", "file": "doc-en-002.png", "language": "en", "reference_text": "Prescription\nTab Metformin 500 mg BD\nTab Amlodipine 5 mg OD\nReview 7 days", "kind": "printed", "status": "ok"}
+{"id": "doc-en-003", "file": "doc-en-003.png", "language": "en", "reference_text": "Lab Report\nHaemoglobin: 10.2 g/dL\nFasting sugar: 110 mg/dL\nPost prandial: 178 mg/dL", "kind": "printed", "status": "ok"}
+{"id": "doc-en-004", "file": "doc-en-004.png", "language": "en", "reference_text": "Discharge Summary\nDiagnosis: Acute gastroenteritis\nTreatment: ORS, zinc 20 mg\nFollow up: 3 days", "kind": "printed", "status": "ok"}
+{"id": "doc-en-005", "file": "doc-en-005.png", "language": "en", "reference_text": "Vaccination Record\nBCG given at birth\nDPT first dose completed\nNext due: 6 weeks", "kind": "printed", "status": "ok"}
+{"id": "doc-en-006", "file": "doc-en-006.png", "language": "en", "reference_text": "Referral Note\nPatient referred to district hospital\nReason: suspected fracture right forearm\nX-ray advised", "kind": "printed", "status": "ok"}
+{"id": "doc-en-007", "file": "doc-en-007.png", "language": "en", "reference_text": "Vitals Chart\nPulse: 92 per minute\nBP: 140/90 mmHg\nTemperature: 100.2 F", "kind": "printed", "status": "ok"}
+{"id": "doc-en-008", "file": "doc-en-008.png", "language": "en", "reference_text": "Antenatal Card\nLMP noted\nIron folic acid daily\nANC visit 2 scheduled", "kind": "printed", "status": "ok"}
+{"id": "doc-en-009", "file": "doc-en-009.png", "language": "en", "reference_text": "Allergy Record\nPenicillin - rash\nSulfa drugs - itching\nNo food allergies known", "kind": "printed", "status": "ok"}
+{"id": "doc-en-010", "file": "doc-en-010.png", "language": "en", "reference_text": "Follow Up Note\nCough improved\nContinue inhaler as advised\nReturn if breathless", "kind": "printed", "status": "ok"}
+{"id": "doc-en-011", "file": "doc-en-011.png", "language": "en", "reference_text": "Blood Pressure Log\nWeek 1: 150/95\nWeek 2: 145/90\nWeek 3: 138/86\nMedicine taken daily", "kind": "printed", "status": "ok"}
+{"id": "doc-en-012", "file": "doc-en-012.png", "language": "en", "reference_text": "Growth Chart\nWeight: 8.4 kg\nHeight: 74 cm\nAge: 12 months\nFully immunized", "kind": "printed", "status": "ok"}
+{"id": "doc-hi-001", "file": "doc-hi-001.png", "language": "hi", "reference_text": "निदान: बुखार\nदवा: पैरासिटामोल\nसात दिन बाद आएं", "kind": "printed", "status": "ok"}
+{"id": "doc-hi-002", "file": "doc-hi-002.png", "language": "hi", "reference_text": "रिपोर्ट\nहीमोग्लोबिन कम है\nआयरन की गोली दी गई", "kind": "printed", "status": "ok"}
+{"id": "doc-hi-003", "file": "doc-hi-003.png", "language": "hi", "reference_text": "टीकाकरण पंजिका\nबीसीजी दिया गया\nअगला टीका छह हफ्ते बाद", "kind": "printed", "status": "ok"}

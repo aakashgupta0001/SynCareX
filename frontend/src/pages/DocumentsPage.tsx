@@ -186,6 +186,16 @@ export function DocumentsPage() {
                   type="file"
                 />
               </label>
+              <label className="form-field">
+                <span>Or capture a document with your camera</span>
+                <input
+                  accept="image/jpeg,image/png,image/webp"
+                  aria-label="Camera capture"
+                  capture="environment"
+                  onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+                  type="file"
+                />
+              </label>
               <label className="form-field form-span-2">
                 <span>Description</span>
                 <input

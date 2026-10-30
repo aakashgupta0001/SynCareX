@@ -1,0 +1,30 @@
+{"id": "en-001", "file": "en-001.wav", "language": "en", "reference_transcript": "Patient reports fever since two days with body ache", "status": "ok"}
+{"id": "en-002", "file": "en-002.wav", "language": "en", "reference_transcript": "Persistent cough for one week worse at night", "status": "ok"}
+{"id": "en-003", "file": "en-003.wav", "language": "en", "reference_transcript": "Blood pressure one fourty over ninety recorded today", "status": "ok"}
+{"id": "en-004", "file": "en-004.wav", "language": "en", "reference_transcript": "Give paracetamol five hundred milligrams three times a day", "status": "ok"}
+{"id": "en-005", "file": "en-005.wav", "language": "en", "reference_transcript": "Allergic to penicillin causes rash", "status": "ok"}
+{"id": "en-006", "file": "en-006.wav", "language": "en", "reference_transcript": "Blood sugar fasting one ten post lunch one eighty", "status": "ok"}
+{"id": "en-007", "file": "en-007.wav", "language": "en", "reference_transcript": "Vomiting since morning unable to keep fluids down", "status": "ok"}
+{"id": "en-008", "file": "en-008.wav", "language": "en", "reference_transcript": "Start tablet metformin five hundred twice daily after food", "status": "ok"}
+{"id": "en-009", "file": "en-009.wav", "language": "en", "reference_transcript": "Swelling over both ankles since three days", "status": "ok"}
+{"id": "en-010", "file": "en-010.wav", "language": "en", "reference_transcript": "Advised salt restriction and daily walking thirty minutes", "status": "ok"}
+{"id": "en-011", "file": "en-011.wav", "language": "en", "reference_transcript": "Patient complaints of headache and giddiness since evening", "status": "ok"}
+{"id": "en-012", "file": "en-012.wav", "language": "en", "reference_transcript": "Review after seven days with fasting blood report", "status": "ok"}
+{"id": "en-013", "file": "en-013.wav", "language": "en", "reference_transcript": "Weight sixty two kilograms height one metre sixty", "status": "ok"}
+{"id": "en-014", "file": "en-014.wav", "language": "en", "reference_transcript": "Chest clear no wheeze heart sounds normal", "status": "ok"}
+{"id": "en-015", "file": "en-015.wav", "language": "en", "reference_transcript": "Check hemoglobin and blood sugar fasting next visit", "status": "ok"}
+{"id": "en-016", "file": "en-016.wav", "language": "en", "reference_transcript": "Burn injury over left forearm dressing done today", "status": "ok"}
+{"id": "en-017", "file": "en-017.wav", "language": "en", "reference_transcript": "Diarrhea since two days give oral rehydration solution", "status": "ok"}
+{"id": "en-018", "file": "en-018.wav", "language": "en", "reference_transcript": "Continue iron folic acid tablet once daily for one month", "status": "ok"}
+{"id": "en-019", "file": "en-019.wav", "language": "en", "reference_transcript": "History of bronchial asthma since childhood uses inhaler", "status": "ok"}
+{"id": "en-020", "file": "en-020.wav", "language": "en", "reference_transcript": "Follow up ultrasound abdomen after one month", "status": "ok"}
+{"id": "en-021", "file": "en-021.wav", "language": "en", "reference_transcript": "Pulse ninety two per minute regular", "status": "ok"}
+{"id": "en-022", "file": "en-022.wav", "language": "en", "reference_transcript": "Give tablet cetirizine ten milligrams at night for five days", "status": "ok"}
+{"id": "en-023", "file": "en-023.wav", "language": "en", "reference_transcript": "Patient advised complete bed rest for three days", "status": "ok"}
+{"id": "en-024", "file": "en-024.wav", "language": "en", "reference_transcript": "No history of diabetes or hypertension in family", "status": "ok"}
+{"id": "hi-001", "file": "hi-001.wav", "language": "hi", "reference_transcript": "बुखार दो दिन से है और सिर दर्द भी है", "status": "record-manually"}
+{"id": "hi-002", "file": "hi-002.wav", "language": "hi", "reference_transcript": "खांसी एक हफ्ते से है रात में ज्यादा होती है", "status": "record-manually"}
+{"id": "hi-003", "file": "hi-003.wav", "language": "hi", "reference_transcript": "पैरासिटामोल दिन में तीन बार दें", "status": "record-manually"}
+{"id": "hi-004", "file": "hi-004.wav", "language": "hi", "reference_transcript": "पेनिसिलिन से एलर्जी है दाने निकल आते हैं", "status": "record-manually"}
+{"id": "hi-005", "file": "hi-005.wav", "language": "hi", "reference_transcript": "ब्लड प्रेशर आज देख लिया गया है", "status": "record-manually"}
+{"id": "hi-006", "file": "hi-006.wav", "language": "hi", "reference_transcript": "सात दिन बाद दोबारा आएं", "status": "record-manually"}

@@ -42,7 +42,8 @@ export type EntityType =
   | "referral"
   | "followup"
   | "passport"
-  | "transfer";
+  | "transfer"
+  | "aiSummary";
 
 export type OperationType = "create" | "update" | "archive" | "upload";
 
@@ -90,13 +91,29 @@ export interface SyncConflict {
   serverPayload: CipherEnvelope | null;
   detectedAt: string;
   status: "open" | "resolved";
-  resolution: "keep_local" | "keep_server" | null;
+  /** "merged" means the clinician kept some fields from each side. */
+  resolution: "keep_local" | "keep_server" | "merged" | null;
   resolvedAt: string | null;
   message: string;
   actorId?: string | null;
   deviceId?: string;
   operationCreatedAt?: string;
   basePayload?: CipherEnvelope | null;
+}
+
+/**
+ * A conflict resolution waiting to be published to the server. The payload
+ * (who, when, which version won, per-field decisions) is encrypted because
+ * field values are clinical content; it is decrypted only immediately before
+ * the request is sent.
+ */
+export interface PendingConflictResolution {
+  id: string;
+  ownerId: string;
+  payload: CipherEnvelope;
+  /** Set when a publish attempt failed, for the sync status surface. */
+  lastError: string | null;
+  createdAt: string;
 }
 
 export interface AuditEvent {
@@ -324,6 +341,12 @@ export interface LocalDocument {
   uploadStatus: DocumentUploadStatus;
   uploadError: string | null;
   uploadedAt: string | null;
+  /**
+   * Server-side chunked upload session id, persisted as soon as the session
+   * exists so an interrupted large upload resumes after a restart instead of
+   * starting from byte zero.
+   */
+  uploadId?: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -380,6 +403,25 @@ export interface LocalAIBlob {
   ciphertext: ArrayBuffer;
   byteSize: number;
   createdAt: string;
+}
+
+/**
+ * A clinician-reviewed AI summary. This is the one AI artifact that
+ * synchronizes; transcripts, OCR text, extractions and raw audio stay on the
+ * device that produced them.
+ */
+export interface LocalAISummary {
+  id: string;
+  patientId: string;
+  authorId: string;
+  text: string;
+  sourceArtifactId: string | null;
+  /** Fixed-section structured summary with cited source line IDs. */
+  sections: Array<Record<string, unknown>> | null;
+  clinicianEdited: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface LegacySyncOperationV1 {
@@ -559,5 +601,12 @@ export interface CachedClinicKeyRow {
   wrapIv: string;
   kdfSalt: string;
   kdfIterations: number;
+  /**
+   * How the wrap is sealed: "passphrase" (default, PBKDF2 KEK) or
+   * "identity" (ECDH to this user's identity key, with `ephemeralPublicKey`
+   * set and `kdfSalt` empty).
+   */
+  wrapType?: "passphrase" | "identity";
+  ephemeralPublicKey?: string;
   cachedAt: string;
 }

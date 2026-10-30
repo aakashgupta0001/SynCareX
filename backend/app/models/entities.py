@@ -235,8 +235,10 @@ class AuditLog(Base):
     clinic_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False
     )
-    actor_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    # Nullable since the patient portal: some audited actions are performed
+    # by a patient, who is not a staff User.
+    actor_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -244,6 +246,29 @@ class AuditLog(Base):
     outcome: Mapped[str] = mapped_column(String(24), default="success", nullable=False)
     details: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    # Tamper-evident per-clinic SHA-256 chain. Nullable because rows written
+    # before the chain existed are backfilled by the audit hash chain
+    # migration; see app/services/audit_chain.py.
+    prev_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    row_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class LoginAttemptCounter(Base):
+    """Failed sign-in attempts per email, backing the login lockout.
+
+    Keyed by email rather than user on purpose: attempts against an address
+    that matches no account are throttled identically, so the lockout can
+    never be used to work out which emails exist.
+    """
+
+    __tablename__ = "login_attempt_counters"
+
+    email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    failed_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
 
 class RefreshSession(Base):
@@ -290,6 +315,73 @@ class ClinicalNote(Base):
     )
 
     consultation: Mapped[Consultation] = relationship(back_populates="clinical_notes")
+
+
+class AISummary(Base):
+    """A clinician-reviewed AI summary, synchronized as its own entity.
+
+    This is the only AI artifact with a server-side home. Transcripts, OCR
+    text, extractions and raw audio stay on the device that produced them:
+    audio for bandwidth and privacy, the rest because their clinical content
+    only enters the record through the reviewed case file or the summary.
+    """
+
+    __tablename__ = "ai_summaries"
+    __table_args__ = (Index("ix_ai_summary_patient", "clinic_id", "patient_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False
+    )
+    patient_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    author_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    # The local AI artifact this summary was generated from, for traceability
+    # back to the device-local transcript it was grounded in.
+    source_artifact_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sections: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    clinician_edited: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class EntitySealedContent(Base):
+    """Clinic-key ciphertext for any synced entity, stored verbatim.
+
+    Patients carry their sealed columns inline; every other entity type stores
+    its dual-write envelope here. The server cannot read any of it — this is
+    the copy that turns authoritative when the plaintext columns are dropped.
+    """
+
+    __tablename__ = "entity_sealed_content"
+    __table_args__ = (
+        UniqueConstraint("clinic_id", "entity_type", "entity_id"),
+        Index("ix_entity_sealed_clinic", "clinic_id", "entity_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    iv: Mapped[str] = mapped_column(String(64), nullable=False)
+    key_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The entity version this envelope seals, so a stale envelope is never
+    # mistaken for the current one after a conflict.
+    entity_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
 
 class Observation(Base):
@@ -426,6 +518,47 @@ class DocumentRecord(Base):
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class DocumentUploadSession(Base):
+    """
+    Server-side state for a chunked document upload. Large files travel in
+    small parts so a flaky connection can resume instead of restarting from
+    byte zero: each part carries its own SHA-256, parts are stored on disk
+    under the session's id, and completion concatenates and verifies the
+    total checksum before finalizing a DocumentRecord.
+    """
+
+    __tablename__ = "document_upload_sessions"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False
+    )
+    patient_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("patients.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # Set at init when the metadata was already registered through sync, or
+    # at completion when the server mints the DocumentRecord itself.
+    document_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    consultation_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("consultations.id", ondelete="SET NULL"), nullable=True
+    )
+    uploaded_by: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
@@ -693,6 +826,50 @@ class SyncChangeRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class ConflictResolution(Base):
+    """
+    Clinician's durable decision about a synchronization conflict.
+
+    The device resolves conflicts locally (record-level keep-local/keep-server
+    or a field-level merge); this table is the server-side receipt: who
+    resolved what, when, and which version won. It is append-only evidence
+    for the audit trail, never an instruction to change clinical data.
+    """
+
+    __tablename__ = "conflict_resolutions"
+    __table_args__ = (
+        Index("ix_conflict_resolution_clinic_resolved", "clinic_id", "resolved_at"),
+        Index(
+            "ix_conflict_resolution_clinic_entity",
+            "clinic_id",
+            "entity_type",
+            "entity_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    entity_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # The base version the conflicted device edit was made against.
+    base_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The entity version that won after the clinician's decision.
+    winning_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # "local" | "server" | "merged".
+    winner_source: Mapped[str] = mapped_column(String(16), nullable=False)
+    resolved_by: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    # Per-field decisions: [{field, choice: "local"|"server",
+    # local_value, server_value}]. Empty for record-level decisions.
+    field_decisions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    resolved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+
+
 @event.listens_for(OrmSession, "before_flush")
 def capture_clinical_mutations(session: OrmSession, _flush_context, _instances) -> None:
     if session.info.get("sync_change_operation_id"):
@@ -810,12 +987,80 @@ class ClinicKeyWrap(Base):
     wrapped_key: Mapped[str] = mapped_column(String(512), nullable=False)
     wrap_iv: Mapped[str] = mapped_column(String(64), nullable=False)
     # Key-derivation parameters the device needs to rebuild the wrapping key.
-    kdf_salt: Mapped[str] = mapped_column(String(64), nullable=False)
-    kdf_iterations: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Empty for identity wraps, which are sealed to the recipient's public key.
+    kdf_salt: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    kdf_iterations: Mapped[int] = mapped_column(Integer, nullable=False, default=310_000)
+    # "passphrase" (the original scheme) or "identity" (sealed to the
+    # recipient's published ECDH public key — how the second device gets the
+    # key without anyone knowing the recipient's passphrase).
+    wrap_type: Mapped[str] = mapped_column(String(24), default="passphrase", nullable=False)
+    # The ephemeral ECDH public key an identity wrap was sealed to, as a JWK.
+    ephemeral_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     created_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+
+
+class IdentityPublicKey(Base):
+    """A user's ECDH P-256 public key, published from their own device.
+
+    This is the fix for the design's known gap: a device holding the clinic
+    key can now wrap it for a colleague by sealing it to their public key —
+    no passphrase sharing, no second clinic key. The private half never
+    leaves the user's device; it is encrypted under their local vault.
+    """
+
+    __tablename__ = "identity_public_keys"
+
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    # A JSON Web Key (kty EC, crv P-256). Stored as text; the server parses it
+    # only enough to refuse garbage, never to use it.
+    public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class PatientPortalAccount(Base):
+    """A patient's own login for the read-only patient portal.
+
+    Deliberately NOT a staff User: patients have no roles, no permissions and
+    no sync, and a portal token must never open a staff route. A staff member
+    creates the account with the patient's email; the patient enrolls with a
+    one-time code handed to them and then sets their own password.
+    """
+
+    __tablename__ = "patient_portal_accounts"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    patient_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
+    # Absent until the patient enrolls; argon2 hash like staff passwords.
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Stored as a SHA-256 hex of the one-time code; the plaintext is shown to
+    # the staff member exactly once and never persisted.
+    enrollment_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enrollment_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 class PatientSearchTerm(Base):
     """
     One keyed hash of one searchable trigram for one patient.

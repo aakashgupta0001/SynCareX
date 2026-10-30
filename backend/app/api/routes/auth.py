@@ -7,10 +7,12 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.database import get_db
-from app.models import AuditLog, RefreshSession, Role, User
+from app.models import RefreshSession, Role, User
 from app.schemas.auth import AuthResponse, LoginRequest, UserRead
+from app.security.login_throttle import ensure_not_locked, record_failure, record_success
 from app.security.passwords import verify_password
 from app.security.tokens import hash_refresh_token, issue_access_token, issue_refresh_token
+from app.services.audit_chain import append_audit_entry
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 REFRESH_COOKIE = "syncarex_refresh"
@@ -64,29 +66,34 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ) -> AuthResponse:
+    email = body.email.strip().lower()
+    # Checked before the account is looked up, so the lockout behaves the
+    # same whether or not the email belongs to an account.
+    ensure_not_locked(db, email)
     user = db.scalar(
         select(User)
         .options(selectinload(User.roles).selectinload(Role.permissions))
-        .where(func.lower(User.email) == body.email.lower())
+        .where(func.lower(User.email) == email)
     )
     if user is None or not user.is_active or not verify_password(
         body.password, user.password_hash
     ):
+        record_failure(db, email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
         )
+    record_success(db, email)
 
     session, refresh_token = _create_refresh_session(db, user)
-    db.add(
-        AuditLog(
-            clinic_id=user.clinic_id,
-            actor_id=user.id,
-            action="auth.login",
-            entity_type="session",
-            entity_id=session.id,
-            details={"client": "browser"},
-        )
+    append_audit_entry(
+        db,
+        clinic_id=user.clinic_id,
+        actor_id=user.id,
+        action="auth.login",
+        entity_type="session",
+        entity_id=session.id,
+        details={"client": "browser"},
     )
     db.commit()
     _set_refresh_cookie(response, refresh_token)

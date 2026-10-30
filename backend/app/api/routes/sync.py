@@ -7,8 +7,10 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_permission
 from app.core.config import get_settings
 from app.database import get_db
-from app.models import Device, User
+from app.models import ConflictResolution, Device, User
 from app.schemas.sync import (
+    ConflictResolutionCreate,
+    ConflictResolutionRead,
     DeviceProvisionRequest,
     DeviceProvisionResponse,
     SyncBatchRequest,
@@ -17,6 +19,7 @@ from app.schemas.sync import (
     SyncPullResponse,
 )
 from app.models import SyncChangeRecord
+from app.services.audit_chain import append_audit_entry
 from app.services.sync import SyncService
 
 router = APIRouter(prefix="/sync", tags=["synchronization"])
@@ -196,3 +199,79 @@ def provision_device(
         offline_grace_days=device.offline_grace_days,
         provisioned_at=device.created_at,
     )
+
+
+@router.post(
+    "/conflict-resolutions",
+    response_model=ConflictResolutionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def publish_conflict_resolution(
+    body: ConflictResolutionCreate,
+    user: User = Depends(require_permission("patients.write")),
+    db: Session = Depends(get_db),
+) -> ConflictResolutionRead:
+    """
+    Records the clinician's conflict decision from a device: who resolved
+    what, when, and which version won. This is durable evidence, not an
+    instruction to change clinical data — the resolved record itself arrives
+    through the normal operation queue.
+    """
+    resolution = ConflictResolution(
+        clinic_id=user.clinic_id,
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+        base_version=body.base_version,
+        winning_version=body.winning_version,
+        winner_source=body.winner_source,
+        resolved_by=user.id,
+        field_decisions=[decision.model_dump() for decision in body.field_decisions],
+    )
+    db.add(resolution)
+    append_audit_entry(
+        db,
+        clinic_id=user.clinic_id,
+        actor_id=user.id,
+        action="sync.conflict.resolved",
+        entity_type=body.entity_type,
+        entity_id=body.entity_id,
+        details={
+            "winner_source": body.winner_source,
+            "base_version": str(body.base_version),
+            "winning_version": str(body.winning_version),
+            "decided_fields": ",".join(
+                decision.field for decision in body.field_decisions
+            ),
+        },
+    )
+    db.commit()
+    db.refresh(resolution)
+    return ConflictResolutionRead.model_validate(resolution)
+
+
+@router.get("/conflict-resolutions", response_model=list[ConflictResolutionRead])
+def list_conflict_resolutions(
+    limit: int = 50,
+    offset: int = 0,
+    user: User = Depends(require_permission("patients.read")),
+    db: Session = Depends(get_db),
+) -> list[ConflictResolutionRead]:
+    """Lists the caller's clinic's conflict resolutions, newest first."""
+    if limit < 1 or limit > 200:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Limit must be between 1 and 200.",
+        )
+    if offset < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Offset must be non-negative.",
+        )
+    rows = db.scalars(
+        select(ConflictResolution)
+        .where(ConflictResolution.clinic_id == user.clinic_id)
+        .order_by(ConflictResolution.resolved_at.desc(), ConflictResolution.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return [ConflictResolutionRead.model_validate(row) for row in rows]

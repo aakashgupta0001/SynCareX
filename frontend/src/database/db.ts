@@ -19,12 +19,13 @@ import type {
   OperationStatus,
   SyncConflict,
   SyncOperation,
+  PendingConflictResolution,
   SearchIndexRow,
   CachedClinicKeyRow,
 } from "./types";
 
 export const DATABASE_NAME = "syncarex-local";
-export const DATABASE_VERSION = 6;
+export const DATABASE_VERSION = 9;
 
 /**
  * Local clinical store.
@@ -38,6 +39,7 @@ export const DATABASE_VERSION = 6;
  *  - v3 (Phase 3): encrypted local AI artifacts and source blobs.
  *  - v4 (Phase 4): durable sync retry attempt timestamps.
  *  - v5 (Phase 5): encrypted local integrity findings and review metadata.
+ *  - v9: durable queue for conflict resolutions awaiting the server.
  */
 class SynCareXDatabase extends Dexie {
   patients!: EntityTable<EncryptedRecord, "id">;
@@ -68,6 +70,10 @@ class SynCareXDatabase extends Dexie {
   transfers!: EntityTable<ClinicTransferRecord, "id">;
   pairedClinics!: EntityTable<PairedClinicRecord, "id">;
   passportRevocations!: EntityTable<PassportRevocationRecord, "tokenHash">;
+  /** Conflict resolutions waiting for the server to come back. */
+  pendingConflictResolutions!: EntityTable<PendingConflictResolution, "id">;
+  /** Clinician-reviewed AI summaries; the one AI artifact that synchronizes. */
+  aiSummaries!: EntityTable<EncryptedRecord, "id">;
 
   /** Retained v1 stores. Read during migration; not used by new code. */
   operations!: EntityTable<LegacySyncOperationV1, "id">;
@@ -293,6 +299,48 @@ class SynCareXDatabase extends Dexie {
       // record's rows on every write.
       searchIndex: "++id, patientId, ownerId, [ownerId+term]",
       clinicKeys: "&id, clinicId",
+    });
+
+    this.version(9).stores({
+      patients: "&id, ownerId, updatedAt, archivedAt, [ownerId+updatedAt]",
+      patientIdentifiers: "&id, ownerId, patientId, [patientId+ownerId]",
+      consultations: "&id, ownerId, patientId, updatedAt, [patientId+ownerId]",
+      clinicalNotes:
+        "&id, ownerId, patientId, consultationId, updatedAt, [consultationId+ownerId]",
+      observations: "&id, ownerId, patientId, consultationId, updatedAt",
+      allergies: "&id, ownerId, patientId, updatedAt",
+      medications: "&id, ownerId, patientId, updatedAt",
+      documents: "&id, ownerId, patientId, consultationId, createdAt",
+      documentBlobs: "&id, ownerId, patientId",
+      localUsers: "&id, email, userId",
+      devices: "&id, &deviceId",
+      syncOperations:
+        "&operationId, &idempotencyKey, &dedupeKey, ownerId, status, entityId, entityType, createdAt, nextAttemptAt, [ownerId+status]",
+      syncConflicts: "&id, ownerId, entityId, status, detectedAt",
+      auditEvents: "&id, ownerId, entityId, createdAt, synced",
+      localSettings: "&key",
+      aiArtifacts: "&id, ownerId, kind, status, createdAt, [ownerId+kind]",
+      aiBlobs: "&id, ownerId, createdAt",
+      integrityFindings:
+        "&id, ownerId, ruleId, category, severity, entityId, status, detectedAt, [ownerId+status]",
+      passports: "&id, ownerId, patientId, tokenHash, expiresAt, createdAt",
+      referrals:
+        "&id, ownerId, patientId, status, priority, receivingClinicId, createdAt, updatedAt",
+      followUps:
+        "&id, ownerId, patientId, status, priority, scheduledAt, [ownerId+status]",
+      transfers:
+        "&id, ownerId, transferId, sourceClinicId, targetClinicId, status, createdAt",
+      pairedClinics: "&id, clinicId, status",
+      passportRevocations: "&tokenHash, revokedAt",
+      searchIndex: "++id, patientId, ownerId, [ownerId+term]",
+      clinicKeys: "&id, clinicId",
+      pendingConflictResolutions: "&id, ownerId, createdAt",
+    });
+
+    this.version(10).stores({
+      // Clinician-reviewed AI summaries synchronize as first-class records;
+      // the rest of the AI artifact store stays device-only.
+      aiSummaries: "&id, ownerId, patientId, updatedAt",
     });
   }
 }

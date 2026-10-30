@@ -62,3 +62,32 @@ class ExtractionResult(BaseModel):
     facts: list[ExtractedFact]
     model_id: str
     requires_review: bool = True
+
+
+class SummarySourceLine(BaseModel):
+    """One retrieved history line, carrying the stable ID the summary must cite."""
+
+    id: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9_:\-.]+$")
+    text: str = Field(min_length=1, max_length=4_000)
+
+
+class SummaryRequest(BaseModel):
+    model_id: str
+    transcript: str = Field(min_length=1, max_length=12_000)
+    history: list[SummarySourceLine] = Field(default_factory=list, max_length=200)
+
+
+class SummaryPoint(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    source_line_ids: list[str] = Field(min_length=1, max_length=20)
+
+
+class ClinicalSummary(BaseModel):
+    presenting_complaint: list[SummaryPoint] = Field(default_factory=list)
+    relevant_history: list[SummaryPoint] = Field(default_factory=list)
+    medications: list[SummaryPoint] = Field(default_factory=list)
+    allergies: list[SummaryPoint] = Field(default_factory=list)
+    vitals: list[SummaryPoint] = Field(default_factory=list)
+    open_questions: list[SummaryPoint] = Field(default_factory=list)
+    model_id: str
+    requires_review: bool = True

@@ -109,7 +109,7 @@ async function encryptWithKey(key: CryptoKey, value: unknown): Promise<CipherEnv
   };
 }
 
-async function decryptWithKey<T>(key: CryptoKey, envelope: CipherEnvelope): Promise<T> {
+export async function decryptWithKey<T>(key: CryptoKey, envelope: CipherEnvelope): Promise<T> {
   const plaintext = await crypto.subtle.decrypt(
     { name: "AES-GCM", iv: base64ToBytes(envelope.iv) as unknown as BufferSource },
     key,
@@ -253,6 +253,37 @@ export async function unlockLocalVault(
   unlockedIndexKey = unlockIndexKey;
   unlockedIdentity = identityFromUser(localUser);
   return unlockedIdentity;
+}
+
+/**
+ * Derives the record key for a provisioned user from a supplied passphrase and
+ * proves it against the stored vault verifier, without changing the unlock
+ * state. Restoring a backup uses this to confirm the passphrase can read the
+ * envelopes in the file before anything is written.
+ */
+export async function deriveRecordKeyWithPassphrase(
+  userId: string,
+  passphrase: string,
+): Promise<CryptoKey> {
+  const localUser = await db.localUsers.where("userId").equals(userId).first();
+  if (!localUser) {
+    throw new Error(
+      "No local account is provisioned for this device. Connect to the network and sign in once to authorize offline access.",
+    );
+  }
+  const key = await deriveKey(passphrase, base64ToBytes(localUser.salt), localUser.iterations);
+  try {
+    const marker = await decryptWithKey<string>(key, {
+      iv: localUser.iv,
+      ciphertext: localUser.verifier,
+    });
+    if (marker !== VERIFIER) throw new Error("Vault verification failed");
+  } catch {
+    throw new Error(
+      "This passphrase does not unlock the vault that encrypted this backup. No records were changed.",
+    );
+  }
+  return key;
 }
 
 export function getUnlockedIdentity(): VaultIdentity | null {
