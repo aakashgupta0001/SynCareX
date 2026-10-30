@@ -91,6 +91,7 @@ device and sets the offline grace period.
 | Transfer package integrity | SHA-256 checksum recorded | Appropriate for detecting corruption. **It is not a signature**: it proves nothing about origin, and the documentation must not claim provenance guarantees. |
 | Audit integrity | Append-only rows with encrypted details | **Not tamper-evident.** There is no hash chain and no signature; an operator with database access can alter history undetectably. Claimed nowhere as more than an operational log. |
 | TLS | Not configured in this repository | Deployment concern. The deployment guide requires TLS termination in front of the API and sets `COOKIE_SECURE=true`, which production startup now enforces. |
+| Clinic key wrapping | AES-GCM wrap of a random 256-bit clinic key, one per user, unwrapped with a PBKDF2 key from the passphrase | Appropriate, and the server never receives an unwrapped key. Minimum 100,000 KDF iterations enforced at the API. **Protects nothing yet**: no clinical record is encrypted with it. See [E2E_ENCRYPTION_DESIGN.md](./E2E_ENCRYPTION_DESIGN.md) |
 
 **Limits stated plainly.** The local vault protects records at rest against
 someone who copies the browser profile without the passphrase. It does not

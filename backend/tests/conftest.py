@@ -87,6 +87,7 @@ def api_client(tmp_path) -> Any:
             ("followups.manage", "Manage patient follow-ups"),
             ("transfers.export", "Export transfer packages"),
             ("transfers.import", "Import transfer packages"),
+            ("users.manage", "Manage clinic users and encryption keys"),
         ]
         created_permissions = [
             Permission(key=k, description=d) for k, d in permission_keys

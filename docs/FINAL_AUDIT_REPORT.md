@@ -94,7 +94,7 @@ payloads return zero rows, and logout invalidates an unexpired access token.
 | Suite | Command | Result |
 |---|---|---|
 | Frontend unit and component | `npm test` | **45 passed** (6 files) |
-| Backend | `python -m pytest` | **124 passed** |
+| Backend | `python -m pytest` | **138 passed** |
 | AI engine | `python -m pytest ai_engine/tests` | **7 passed** |
 | Typecheck | `tsc -b` | clean |
 | Production build | `npm run build` | passed, 20 precache entries (734 KiB) |
@@ -297,6 +297,6 @@ retrieve-then-generate.
 
 | PS04 item | Status | Why |
 |---|---|---|
-| End-to-end encryption | **Not implemented** | Clinical fields are stored in plaintext columns server-side and sync payloads are decrypted client-side before being sent, so the protection is TLS in transit plus device-side encryption at rest. True E2E would stop the server searching, paginating or exporting FHIR, and needs a key-distribution design. It is an architectural decision, not an oversight to patch quietly |
+| End-to-end encryption | **Step 1 of 5 implemented** | Clinic data keys wrapped per user are implemented and tested; the server stores opaque blobs and never holds an unwrapped key. **No clinical record is encrypted with them yet.** The remaining four steps, and the five server-side readers of plaintext that must move first, are specified in [E2E_ENCRYPTION_DESIGN.md](./security/E2E_ENCRYPTION_DESIGN.md) |
 | Mobile alternative with SQLite | **Not implemented** | PWA only. Adding a native shell is a new platform target and cannot be built or tested in this environment |
 | PostgreSQL as the central database | **Configured, never exercised** | Docker is not installed on this machine; every test to date has run on SQLite |

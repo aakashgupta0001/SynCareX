@@ -87,7 +87,7 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 All figures produced by running the commands.
 
 - Frontend unit and component tests: **59 passed** (8 files)
-- Backend tests: **124 passed**
+- Backend tests: **138 passed**
 - AI engine tests: **9 passed**
 - Offline acceptance in a real browser: **19 PASS, 6 BLOCKED, 0 FAIL**
 - Two-device synchronization: **8 PASS, 0 FAIL**
@@ -154,7 +154,7 @@ recommend treatment. No compliance certification is claimed.
 | RAG pipeline | Lexical retrieve-then-generate, ranked and tested. **No embeddings or vector store** |
 | FastAPI authenticated sync APIs | Implemented and tested |
 | PostgreSQL centralized database | Configured, **never exercised** (SQLite only) |
-| End-to-end encryption | **Not implemented.** Device-side encryption at rest plus TLS in transit; the server stores clinical fields in plaintext |
+| End-to-end encryption | **In progress — key material only.** Clinic data keys, wrapped per user, are implemented and tested; the server never sees an unwrapped key. **No clinical record is encrypted with them yet**, so records are still plaintext server-side. Design and staged migration in [E2E_ENCRYPTION_DESIGN.md](./docs/security/E2E_ENCRYPTION_DESIGN.md) |
 | Audit logs | Implemented, not tamper-evident |
 | Conflict resolution with version tracking and retry-safe operations | Implemented and tested — the strongest part of the system |
 | Mobile alternative with SQLite | **Not implemented** (PWA only) |
