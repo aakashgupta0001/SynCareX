@@ -105,6 +105,32 @@ def publish_clinic_key_wraps(
             detail="A clinic key may only be wrapped for users in your own clinic.",
         )
 
+    # Only a holder of the clinic key can publish wraps once the clinic has
+    # one. A caller without a wrap cannot know the existing key, so anything
+    # it publishes would be a second, different key at the same epoch: one
+    # clinic would end up with records and search hashes split across keys.
+    caller_holds_key = db.scalar(
+        select(func.count())
+        .select_from(ClinicKeyWrap)
+        .where(
+            ClinicKeyWrap.clinic_id == user.clinic_id,
+            ClinicKeyWrap.user_id == user.id,
+        )
+    )
+    clinic_has_key = db.scalar(
+        select(func.count())
+        .select_from(ClinicKeyWrap)
+        .where(ClinicKeyWrap.clinic_id == user.clinic_id)
+    )
+    if clinic_has_key and not caller_holds_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This clinic already has an encryption key. A user who holds it "
+                "must share it with you; creating a new one would split the clinic's data."
+            ),
+        )
+
     for wrap in body.wraps:
         existing = db.scalar(
             select(ClinicKeyWrap).where(

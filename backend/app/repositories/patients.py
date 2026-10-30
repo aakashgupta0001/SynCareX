@@ -1,6 +1,6 @@
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Patient, PatientSearchTerm
@@ -53,6 +53,14 @@ class PatientRepository:
         count_query = select(func.count()).select_from(Patient).where(
             Patient.clinic_id == clinic_id
         )
+        plaintext_filter = None
+        if search:
+            term = f"%{search.strip()}%"
+            plaintext_filter = or_(
+                Patient.full_name.ilike(term),
+                Patient.patient_number.ilike(term),
+                Patient.village.ilike(term),
+            )
         if search_terms:
             # Every trigram of the query must be present on the record, so
             # the matching patient ids are the intersection.
@@ -68,17 +76,22 @@ class PatientRepository:
                     == len(set(search_terms))
                 )
             )
-            query = query.where(Patient.id.in_(matching))
-            count_query = count_query.where(Patient.id.in_(matching))
-        elif search:
-            term = f"%{search.strip()}%"
-            search_filter = or_(
-                Patient.full_name.ilike(term),
-                Patient.patient_number.ilike(term),
-                Patient.village.ilike(term),
-            )
+            search_filter = Patient.id.in_(matching)
+            if plaintext_filter is not None:
+                # Dual-write only. Patients synced before the index existed,
+                # or by a device without the clinic key, have no hash rows
+                # and would otherwise never match. They are found by the
+                # legacy plaintext path instead. Remove this together with
+                # the plaintext columns, after every record is indexed.
+                unindexed = ~select(PatientSearchTerm.id).where(
+                    PatientSearchTerm.patient_id == Patient.id
+                ).exists()
+                search_filter = or_(search_filter, and_(unindexed, plaintext_filter))
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
+        elif plaintext_filter is not None:
+            query = query.where(plaintext_filter)
+            count_query = count_query.where(plaintext_filter)
         total = self.db.scalar(count_query) or 0
         patients = self.db.scalars(
             query.order_by(Patient.updated_at.desc(), Patient.id)

@@ -133,9 +133,12 @@ export const syncRepository = {
     const allOperations = await this.list(ownerId);
     const pending = allOperations.filter(
       (operation) =>
-        operation.status === "pending" ||
-        operation.status === "retry_wait" ||
-        operation.status === "processing",
+        // Passports are device-only. Older builds queued them, and the server
+        // rejects them permanently, so leftover operations are never sent.
+        operation.entityType !== "passport" &&
+        (operation.status === "pending" ||
+          operation.status === "retry_wait" ||
+          operation.status === "processing"),
     );
     const staleBefore = now - PROCESSING_RECOVERY_MS;
     for (const operation of pending) {

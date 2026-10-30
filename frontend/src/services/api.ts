@@ -394,11 +394,11 @@ export const api = {
    */
   async listPatients(search = "", searchTerms: string[] = []): Promise<PatientPage> {
     const params = new URLSearchParams({ page: "1", page_size: "100" });
-    if (searchTerms.length) {
-      for (const term of searchTerms) params.append("search_terms", term);
-    } else if (search.trim()) {
-      params.set("search", search.trim());
-    }
+    for (const term of searchTerms) params.append("search_terms", term);
+    // During dual-write the plaintext query is still sent so the server can
+    // find patients that have no hashed terms yet (synced before the index,
+    // or by a device without the clinic key).
+    if (search.trim()) params.set("search", search.trim());
     return apiRequest<PatientPage>(`/patients?${params}`);
   },
 

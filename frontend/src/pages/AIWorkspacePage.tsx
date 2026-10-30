@@ -31,6 +31,7 @@ import {
 import { aiRepository, type DecryptedAIArtifact } from "../repositories/aiRepository";
 import { patientRepository } from "../repositories/patientRepository";
 import { rankHistoryLines } from "../offline/historyRanking";
+import { buildCaseFile, CASE_FILE_REASON } from "../offline/caseFile";
 import type { LocalPatient } from "../database/types";
 import { localAIClient, type ExtractedFact, type LocalAIModel, type LocalAIStatus } from "../services/localAI";
 
@@ -259,7 +260,7 @@ export function AIWorkspacePage() {
         // Rank before applying the character budget, so the context sent to
         // the model is the most relevant history rather than whichever
         // records happen to come first.
-        const ranked = rankHistoryLines(sourceLines, term, 15_000);
+        const ranked = rankHistoryLines(sourceLines, term, 12_000);
         const matches = ranked.lines;
         if (!matches.length) {
           setError(
@@ -271,7 +272,7 @@ export function AIWorkspacePage() {
         }
         setSourceText(matches.join("\n"));
         setMessage(
-          `Loaded ${matches.length} of ${ranked.matched} matching item(s) for ${patient.fullName}, most relevant first.${ranked.truncated ? " Some matches did not fit the 15,000-character budget; narrow the search to include them." : ""} Review and edit the source before sending it to the local AI engine.`,
+          `Loaded ${matches.length} of ${ranked.matched} matching item(s) for ${patient.fullName}, most relevant first.${ranked.truncated ? " Some matches did not fit the 12,000-character budget; narrow the search to include them." : ""} Review and edit the source before sending it to the local AI engine.`,
         );
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Local patient history could not be read.");
@@ -422,6 +423,10 @@ export function AIWorkspacePage() {
 
   async function saveReview() {
     if (!selectedArtifact || selectedArtifact.kind !== "extraction") return;
+    if (selectedArtifact.payload.applied_at) {
+      setError("These facts are already in the patient record; the review can no longer change.");
+      return;
+    }
     const decisions = facts.map((fact, index) => ({
       ...fact,
       decision: acceptedFacts.has(index) ? "accepted_by_clinician" : "not_accepted",
@@ -433,10 +438,122 @@ export function AIWorkspacePage() {
         "reviewed",
       );
       setSelectedArtifact(updated);
-      setMessage("Review decisions were saved encrypted on this device. No facts were added to a clinical note.");
+      setMessage("Review decisions were saved encrypted on this device. Select the patient, then add the accepted facts to their record.");
       await reload();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Review decisions could not be saved.");
+    }
+  }
+
+  async function addAcceptedFactsToRecord() {
+    setError("");
+    setMessage("");
+    if (!selectedArtifact || selectedArtifact.kind !== "extraction") {
+      setError("Open an extraction and save your review decisions first.");
+      return;
+    }
+    if (selectedArtifact.status !== "reviewed") {
+      setError("Save your review decisions before adding facts to the record.");
+      return;
+    }
+    if (selectedArtifact.payload.applied_at) {
+      setError("The accepted facts from this extraction are already in the patient record.");
+      return;
+    }
+    if (!patientId) {
+      setError("Select the patient this source belongs to, in the patient-history section.");
+      return;
+    }
+    // Use the saved review, not the on-screen checkboxes, so the record holds
+    // exactly what the clinician signed off.
+    const reviewed = Array.isArray(selectedArtifact.payload.facts)
+      ? (selectedArtifact.payload.facts as Array<ExtractedFact & { decision?: string }>)
+      : [];
+    const accepted = reviewed.filter((fact) => fact.decision === "accepted_by_clinician");
+    if (!accepted.length) {
+      setError("No facts were accepted in the saved review.");
+      return;
+    }
+
+    setBusy("record");
+    try {
+      const patient = await patientRepository.getLocal(patientId);
+      if (!patient) throw new Error("The selected patient is no longer available locally.");
+      const reviewedAt =
+        typeof selectedArtifact.payload.reviewed_at === "string"
+          ? selectedArtifact.payload.reviewed_at
+          : new Date().toISOString();
+      const plan = buildCaseFile(accepted, {
+        sourceArtifactId: selectedArtifact.id,
+        reviewedAt,
+      });
+
+      const consultation = await consultationRepository.createLocal({
+        patientId,
+        reason: CASE_FILE_REASON,
+      });
+      const note = await clinicalNoteRepository.createLocal({
+        consultationId: consultation.id,
+        patientId,
+        body: plan.noteBody,
+        noteType: "general",
+      });
+      const allergyIds: string[] = [];
+      for (const item of plan.allergies) {
+        allergyIds.push((await allergyRepository.createLocal({ patientId, substance: item.substance })).id);
+      }
+      const medicationIds: string[] = [];
+      for (const item of plan.medications) {
+        medicationIds.push(
+          (await medicationRepository.createLocal({
+            patientId,
+            consultationId: consultation.id,
+            name: item.name,
+          })).id,
+        );
+      }
+      const observationIds: string[] = [];
+      for (const item of plan.observations) {
+        observationIds.push(
+          (await observationRepository.createLocal({
+            patientId,
+            consultationId: consultation.id,
+            code: item.code,
+            label: item.label,
+            value: item.value,
+          })).id,
+        );
+      }
+
+      const updated = await aiRepository.updateLocal(
+        selectedArtifact.id,
+        {
+          ...selectedArtifact.payload,
+          applied_at: new Date().toISOString(),
+          applied_patient_id: patientId,
+          applied_records: {
+            consultation_id: consultation.id,
+            note_id: note.id,
+            allergy_ids: allergyIds,
+            medication_ids: medicationIds,
+            observation_ids: observationIds,
+          },
+        },
+        "reviewed",
+      );
+      setSelectedArtifact(updated);
+      setMessage(
+        `Added to ${patient.fullName}'s record: a case file note${allergyIds.length ? `, ${allergyIds.length} allergy record(s)` : ""}${medicationIds.length ? `, ${medicationIds.length} medication record(s)` : ""}${observationIds.length ? `, ${observationIds.length} measurement(s)` : ""}. Everything is encrypted on this device and queued for sync.${plan.noteOnly.length ? ` ${plan.noteOnly.length} long fact(s) are kept in the note only.` : ""}`,
+      );
+      await reload();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? `${reason.message} Records already created stay in the patient record; check the consultation before retrying.`
+          : "The facts could not be added to the record.",
+      );
+    } finally {
+      setBusy("");
     }
   }
 
@@ -789,7 +906,7 @@ export function AIWorkspacePage() {
           <label className="form-field">
             <span>Source text</span>
             <textarea
-              maxLength={15_000}
+              maxLength={12_000}
               onChange={(event) => setSourceText(event.target.value)}
               placeholder="Paste a transcript, OCR result, or clinician-recorded text. Avoid adding information not present in the source."
               rows={5}
@@ -839,6 +956,19 @@ export function AIWorkspacePage() {
               <button className="button button-secondary" onClick={() => void saveReview()} type="button">
                 Save review decisions
               </button>
+              <button
+                className="button button-primary"
+                disabled={busy !== "" || selectedArtifact?.status !== "reviewed" || Boolean(selectedArtifact?.payload.applied_at)}
+                onClick={() => void addAcceptedFactsToRecord()}
+                type="button"
+              >
+                <Check size={15} />{" "}
+                {selectedArtifact?.payload.applied_at
+                  ? "Added to patient record"
+                  : busy === "record"
+                    ? "Adding to record..."
+                    : "Add accepted facts to patient record"}
+              </button>
               <button className="button button-quiet" onClick={createSourceLinkedSummary} type="button">
                 <FileText size={15} /> Build editable source-linked summary
               </button>
@@ -863,7 +993,7 @@ export function AIWorkspacePage() {
         <div className="section-heading">
           <div>
             <h2>Encrypted local work</h2>
-            <p>AI source files and outputs are local-only artifacts; they are not added to the patient sync queue or clinical record automatically.</p>
+            <p>AI source files and outputs stay on this device. Accepted facts reach the patient record, and sync, only when a clinician adds them after review.</p>
           </div>
         </div>
         {loading ? (

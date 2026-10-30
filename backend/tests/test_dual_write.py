@@ -275,3 +275,47 @@ def test_search_terms_are_scoped_to_the_callers_clinic(api_client) -> None:
     other_headers = login(client, "other@example.com")
     params = "&".join(f"search_terms={t}" for t in [hashed(x) for x in trigrams("riverbend")])
     assert client.get(f"/api/v1/patients?{params}", headers=other_headers).json()["total"] == 0
+
+
+def test_patients_without_hashed_terms_are_still_found_during_dual_write(api_client) -> None:
+    client = api_client["client"]
+    headers = login(client)
+    provision(client, headers)
+
+    indexed = str(uuid4())
+    legacy = str(uuid4())
+    send(
+        client,
+        headers,
+        [
+            operation(
+                entity_id=indexed,
+                payload=patient_payload(full_name="Amara Cipher", village="Riverbend"),
+                sealed_content=sealed("Amara Cipher"),
+                search_terms=patient_terms("Amara Cipher", "Riverbend"),
+            ),
+            # Synced by a device without the clinic key: no hash rows.
+            operation(
+                entity_id=legacy,
+                payload=patient_payload(full_name="Chandni Legacy", village="Riverbend"),
+            ),
+        ],
+    )
+
+    hashed_params = "&".join(
+        f"search_terms={term}" for term in [hashed(t) for t in trigrams("riverbend")]
+    )
+
+    # Hashes alone match only the indexed record, as before.
+    hashed_only = client.get(f"/api/v1/patients?{hashed_params}", headers=headers)
+    assert hashed_only.status_code == 200, hashed_only.text
+    assert {item["id"] for item in hashed_only.json()["items"]} == {indexed}
+
+    # With the plaintext query alongside, the unindexed record is found too,
+    # and the indexed one is not duplicated.
+    both = client.get(
+        f"/api/v1/patients?{hashed_params}&search=Riverbend", headers=headers
+    )
+    assert both.status_code == 200, both.text
+    assert both.json()["total"] == 2
+    assert {item["id"] for item in both.json()["items"]} == {indexed, legacy}

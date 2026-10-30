@@ -36,13 +36,12 @@ export function PatientsPage() {
       // The local vault answers first, always. The server is only a refresh.
       if (apiUsable && session?.mode === "online") {
         try {
-          // Send keyed hashes rather than the query itself, so the
-          // server can match without ever receiving a patient name.
+          // Keyed hashes match indexed patients. The plaintext query is
+          // still sent during dual-write so patients without hashes (synced
+          // before the index, or by a device without the clinic key) are
+          // not silently missing from the results.
           const hashedTerms = await serverIndexTerms(trigrams(query));
-          const remote = await api.listPatients(
-            hashedTerms.length ? "" : query,
-            hashedTerms,
-          );
+          const remote = await api.listPatients(query, hashedTerms);
           await Promise.all(
             remote.items.map((item) =>
               patientRepository.cacheServerPatient(mapPatientFromApi(item)),

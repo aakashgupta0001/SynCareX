@@ -207,3 +207,34 @@ def test_key_material_never_reaches_the_audit_trail(api_client) -> None:
     assert "encryption.clinic_key.published" in body
     assert wrap["wrapped_key"] not in body
     assert wrap["kdf_salt"] not in body
+
+
+def test_a_user_without_the_key_cannot_create_a_second_clinic_key(api_client) -> None:
+    client = api_client["client"]
+    doctor = login(client)
+    doctor_headers = {"Authorization": f"Bearer {doctor['access_token']}"}
+    doctor_id = doctor["user"]["id"]
+    nurse_id = login(client, "nurse@example.com")["user"]["id"]
+
+    # The clinic gets its key through a wrap for the nurse only, so the
+    # doctor does not hold it.
+    assert (
+        client.post(
+            "/api/v1/keys/clinic",
+            json={"wraps": [synthetic_wrap(nurse_id)]},
+            headers=doctor_headers,
+        ).status_code
+        == 201
+    )
+
+    # Anything the doctor publishes for themselves now would be a different
+    # key at the same epoch, which would split the clinic's data.
+    second = client.post(
+        "/api/v1/keys/clinic",
+        json={"wraps": [synthetic_wrap(doctor_id)]},
+        headers=doctor_headers,
+    )
+    assert second.status_code == 409
+    status_now = client.get("/api/v1/keys/clinic/status", headers=doctor_headers).json()
+    assert status_now["user_count_with_access"] == 1
+    assert status_now["wrapped_for_this_user"] is False

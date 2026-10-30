@@ -18,8 +18,6 @@ import {
   requireUnlockedIdentity,
 } from "../security/localVault";
 import { patientRepository } from "./patientRepository";
-import { buildOperation } from "./syncRepository";
-import { getLocalDeviceId } from "../offline/device";
 
 export interface EmergencySummaryPayload {
   passportId: string;
@@ -156,7 +154,6 @@ export const passportRepository = {
     const tokenHash = await sha256Hex(token);
 
     const encrypted = await encryptLocalValue(fullPayload);
-    const deviceId = await getLocalDeviceId();
 
     const record: EmergencyPassportRecord = {
       id: passportId,
@@ -174,23 +171,10 @@ export const passportRepository = {
       version: 1,
     };
 
-    // Queue durable sync operation
-    const operation = await buildOperation({
-      ownerId: identity.userId,
-      entityType: "passport",
-      entityId: passportId,
-      operationType: "create",
-      payload: encrypted,
-      baseVersion: 0,
-      localVersion: 1,
-      deviceId,
-      actorId: identity.userId,
-    });
-
-    await db.transaction("rw", [db.passports, db.syncOperations], async () => {
-      await db.passports.put(record);
-      await db.syncOperations.put(operation);
-    });
+    // Passports stay on this device. The server has no passport handler, so a
+    // queued operation was permanently rejected on every sync. Revocation and
+    // verification already work from local records.
+    await db.passports.put(record);
 
     return { record, token, payload: fullPayload };
   },

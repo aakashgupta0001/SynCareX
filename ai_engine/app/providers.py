@@ -18,6 +18,14 @@ _INFERENCE_LOCK = Lock()
 _AUDIO_SUFFIXES = {".wav", ".mp3", ".m4a", ".ogg", ".webm", ".flac"}
 _WHISPER_AUDIO_SUFFIXES = {".wav", ".mp3", ".ogg", ".flac"}
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"}
+# The prompt, the source text and up to 1,024 output tokens must all fit in
+# the context window. At 4,096 tokens a 15,000-character source left roughly
+# 200 tokens for the JSON answer, so long histories came back truncated.
+# 12,000 characters fits 8,192 tokens with room for the answer if text averages
+# about 2 characters per token. English does better; very dense Devanagari may
+# not, so this is an estimate, not a guarantee.
+_EXTRACTION_CONTEXT_TOKENS = 8192
+_MAX_EXTRACTION_CHARS = 12_000
 
 
 class ProviderUnavailable(Exception):
@@ -217,8 +225,8 @@ def ocr(
 def extract_facts(settings: Settings, model_id: str, text: str) -> ExtractionResult:
     if not text.strip():
         raise ValueError("Provide transcript or OCR text to extract.")
-    if len(text) > 15_000:
-        raise ValueError("Extraction input must be 15,000 characters or fewer.")
+    if len(text) > _MAX_EXTRACTION_CHARS:
+        raise ValueError("Extraction input must be 12,000 characters or fewer.")
     spec, model_path = _require_model(settings, model_id, "structured-extraction")
     if importlib.util.find_spec("llama_cpp") is None:
         binary = runtime_paths(settings)["llama"]
@@ -235,7 +243,7 @@ def extract_facts(settings: Settings, model_id: str, text: str) -> ExtractionRes
         with _INFERENCE_LOCK:
             llm = Llama(
                 model_path=str(model_path),
-                n_ctx=4096,
+                n_ctx=_EXTRACTION_CONTEXT_TOKENS,
                 n_threads=max(1, min(os.cpu_count() or 1, 4)),
                 n_gpu_layers=0,
                 verbose=False,
@@ -316,7 +324,7 @@ def _extract_with_llama_cli(
             "-m",
             str(model_path),
             "-c",
-            "4096",
+            str(_EXTRACTION_CONTEXT_TOKENS),
             "-t",
             "4",
             "--system-prompt",
