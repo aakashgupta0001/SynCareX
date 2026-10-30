@@ -6,6 +6,8 @@ import { PageHeader } from "../components/PageHeader";
 import { SyncStateBadge } from "../components/SyncStateBadge";
 import { patientRepository } from "../repositories/patientRepository";
 import { syncRepository, type RecordSyncState } from "../repositories/syncRepository";
+import { serverIndexTerms } from "../security/clinicKey";
+import { trigrams } from "../offline/searchIndex";
 import { api, ApiError, mapPatientFromApi } from "../services/api";
 import { useAuth } from "../services/auth";
 import { useConnectivityState } from "../hooks/useConnectivity";
@@ -34,7 +36,13 @@ export function PatientsPage() {
       // The local vault answers first, always. The server is only a refresh.
       if (apiUsable && session?.mode === "online") {
         try {
-          const remote = await api.listPatients(query);
+          // Send keyed hashes rather than the query itself, so the
+          // server can match without ever receiving a patient name.
+          const hashedTerms = await serverIndexTerms(trigrams(query));
+          const remote = await api.listPatients(
+            hashedTerms.length ? "" : query,
+            hashedTerms,
+          );
           await Promise.all(
             remote.items.map((item) =>
               patientRepository.cacheServerPatient(mapPatientFromApi(item)),

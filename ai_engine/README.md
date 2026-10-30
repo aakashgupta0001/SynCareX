@@ -23,7 +23,12 @@ allowed by default. For another trusted frontend origin, set
 `SYNCAREX_AI_ALLOWED_ORIGINS` before starting the service.
 
 The service also supports `SYNCAREX_AI_MODEL_DIR`,
-`SYNCAREX_WHISPER_BIN`, and `SYNCAREX_TESSERACT_BIN`. The model directory
+`SYNCAREX_WHISPER_BIN`, `SYNCAREX_TESSERACT_BIN`, `SYNCAREX_FFMPEG_BIN`,
+and `SYNCAREX_LLAMA_BIN`. On Windows, `.\ai_engine\setup_local_ai.ps1`
+installs pinned, SHA-256-verified CPU builds of whisper.cpp and llama.cpp and
+uses winget to install Tesseract OCR and FFmpeg. The runtime installer does
+not download models; choose each model explicitly in the AI workspace. The
+model directory
 defaults to `%USERPROFILE%\.syncarex\models`. Never expose this loopback service
 through a LAN interface or reverse proxy.
 
@@ -36,14 +41,19 @@ presses the corresponding model button; installation uses a temporary file,
 enforces the catalog byte limit, verifies SHA-256, then atomically renames it.
 No model binary is committed or included in the PWA.
 
-- Transcription requires a separately installed `whisper-cli` executable.
-  Configure its full path with `SYNCAREX_WHISPER_BIN` when it is not on PATH.
+- Transcription uses the pinned CPU `whisper-cli` executable on Windows.
+  Configure its full path with `SYNCAREX_WHISPER_BIN` when it is not in the
+  setup script's default location or on PATH. Browser WebM/M4A recordings are
+  converted to bounded, mono 16 kHz WAV by FFmpeg before inference; WAV, MP3,
+  OGG and FLAC are read directly.
   Mixed Hindi-English (Hinglish) uses automatic language detection and has not
   been accuracy-validated.
 - OCR requires Tesseract OCR and the relevant `.traineddata` language files.
   The current interface supports image files, not PDF conversion.
-- Structured extraction requires the optional CPU `llama-cpp-python` package.
-  Install it explicitly with `python -m pip install -r ai_engine/requirements-optional.txt`.
+- Structured extraction uses the pinned CPU `llama-cli` executable on Windows.
+  Configure `SYNCAREX_LLAMA_BIN` when it is not in the setup script's default
+  location. The existing optional `llama-cpp-python` adapter remains supported
+  and takes precedence when installed.
 - Each model declares a conservative free-RAM threshold. The engine rechecks
   current memory and verifies model integrity before every inference. It will
   refuse inference when either prerequisite is missing.
@@ -58,13 +68,12 @@ generate diagnoses, recommendations, or prescriptions.
 ## Current limitations
 
 Model metadata, readiness reporting, verified downloads, encrypted local
-artifacts, evidence-linked review, and optional adapters are implemented.
-Actual transcription, OCR, and extraction are unavailable until their runtime
-and model prerequisites are installed. This checkout has no AI model weights;
-do not use real patient data. PDF OCR, background recording, model-download
-resume, model deletion, and automatic artifact synchronization are not
-implemented. Verify the readiness panel on the target device before any
-download or inference.
+artifacts, evidence-linked review, and runtime adapters are implemented.
+Windows setup installs CPU runtimes but does not automatically download models;
+use the AI workspace's explicit download actions. Verify the readiness panel
+before inference. This is an experimental documentation aid, not a medical
+device; use synthetic data only. PDF OCR, model-download resume, model deletion,
+and automatic artifact synchronization are not implemented.
 
 Run engine tests from the repository root:
 

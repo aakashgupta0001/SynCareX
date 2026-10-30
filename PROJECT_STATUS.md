@@ -154,7 +154,7 @@ recommend treatment. No compliance certification is claimed.
 | RAG pipeline | Lexical retrieve-then-generate, ranked and tested. **No embeddings or vector store** |
 | FastAPI authenticated sync APIs | Implemented and tested |
 | PostgreSQL centralized database | Configured, **never exercised** (SQLite only) |
-| End-to-end encryption | **In progress — key material only.** Clinic data keys, wrapped per user, are implemented and tested; the server never sees an unwrapped key. **No clinical record is encrypted with them yet**, so records are still plaintext server-side. Design and staged migration in [E2E_ENCRYPTION_DESIGN.md](./docs/security/E2E_ENCRYPTION_DESIGN.md) |
+| End-to-end encryption | **In progress — steps 1-3 of 5.** Clinic keys wrapped per user; patients dual-written as ciphertext alongside plaintext; patient search moved onto keyed hashes so the server never receives the query. **Plaintext remains authoritative and four server-side readers still read it, so records are not yet unreadable to the operator.** See [E2E_ENCRYPTION_DESIGN.md](./docs/security/E2E_ENCRYPTION_DESIGN.md) |
 | Audit logs | Implemented, not tamper-evident |
 | Conflict resolution with version tracking and retry-safe operations | Implemented and tested — the strongest part of the system |
 | Mobile alternative with SQLite | **Not implemented** (PWA only) |

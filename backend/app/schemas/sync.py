@@ -20,6 +20,17 @@ EntityType = Literal[
 OperationType = Literal["create", "update", "archive", "upload"]
 
 
+class SealedContent(BaseModel):
+    """
+    Content encrypted with the clinic key. The server stores these fields and
+    cannot read them; during dual-write the plaintext payload is still what
+    readers use.
+    """
+
+    ciphertext: str = Field(min_length=16, max_length=200_000)
+    iv: str = Field(min_length=8, max_length=64)
+    key_epoch: int = Field(ge=1, le=1_000_000)
+
 class SyncOperationIn(BaseModel):
     """One queued device operation."""
 
@@ -35,6 +46,12 @@ class SyncOperationIn(BaseModel):
     base_version: int = Field(ge=0)
     local_version: int = Field(ge=1)
     payload: dict[str, Any] = Field(default_factory=dict)
+    # Dual-write: the same content sealed with the clinic key. Optional,
+    # because a device without a clinic key still synchronizes normally.
+    sealed_content: SealedContent | None = None
+    # Keyed hashes of this record's searchable trigrams, so the server can
+    # match searches without reading the terms.
+    search_terms: list[str] = Field(default_factory=list, max_length=4000)
     created_at: datetime | None = None
 
 

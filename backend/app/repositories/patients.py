@@ -3,7 +3,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Patient
+from app.models import Patient, PatientSearchTerm
 from app.schemas.patients import PatientCreate, PatientUpdate
 
 
@@ -30,13 +30,47 @@ class PatientRepository:
         )
 
     def list(
-        self, clinic_id: UUID, search: str | None, page: int, page_size: int
+        self,
+        clinic_id: UUID,
+        search: str | None,
+        page: int,
+        page_size: int,
+        search_terms: list[str] | None = None,
     ) -> tuple[list[Patient], int]:
+        """
+        Lists patients, optionally filtered.
+
+        `search_terms` are keyed hashes of the query's trigrams, computed on
+        the device with a key the server does not have. When they are
+        supplied the server matches hash against hash and never sees the
+        query, which is what lets search survive end-to-end encryption.
+
+        `search` is the legacy plaintext path. It still works while
+        dual-write is in effect and records may predate the index, and it is
+        what must be removed once the plaintext columns go.
+        """
         query = select(Patient).where(Patient.clinic_id == clinic_id)
         count_query = select(func.count()).select_from(Patient).where(
             Patient.clinic_id == clinic_id
         )
-        if search:
+        if search_terms:
+            # Every trigram of the query must be present on the record, so
+            # the matching patient ids are the intersection.
+            matching = (
+                select(PatientSearchTerm.patient_id)
+                .where(
+                    PatientSearchTerm.clinic_id == clinic_id,
+                    PatientSearchTerm.term.in_(search_terms),
+                )
+                .group_by(PatientSearchTerm.patient_id)
+                .having(
+                    func.count(func.distinct(PatientSearchTerm.term))
+                    == len(set(search_terms))
+                )
+            )
+            query = query.where(Patient.id.in_(matching))
+            count_query = count_query.where(Patient.id.in_(matching))
+        elif search:
             term = f"%{search.strip()}%"
             search_filter = or_(
                 Patient.full_name.ilike(term),

@@ -155,6 +155,12 @@ class Patient(Base):
     allergies: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Dual-write (E2E step 2): the same content encrypted with the clinic
+    # key. Nullable while plaintext remains authoritative; a device with
+    # no clinic key simply writes nothing here.
+    content_ciphertext: Mapped[str | None] = mapped_column(Text, nullable=True)
+    content_iv: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    content_key_epoch: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -789,3 +795,30 @@ class ClinicKeyWrap(Base):
     created_by: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
+class PatientSearchTerm(Base):
+    """
+    One keyed hash of one searchable trigram for one patient.
+
+    This is how the server keeps patient search working once it can no longer
+    read names: devices send hashes computed with a key derived from the
+    clinic key, and the server matches hash against hash without ever holding
+    the term. See docs/security/E2E_ENCRYPTION_DESIGN.md.
+
+    The index leaks equality and frequency: the operator can see that two
+    patients share a term, and can count how often a term occurs.
+    """
+
+    __tablename__ = "patient_search_terms"
+    __table_args__ = (
+        Index("ix_patient_search_clinic_term", "clinic_id", "term"),
+        UniqueConstraint("patient_id", "term", name="uq_patient_search_term"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    clinic_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("clinics.id", ondelete="CASCADE"), nullable=False
+    )
+    patient_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("patients.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    term: Mapped[str] = mapped_column(String(32), nullable=False)

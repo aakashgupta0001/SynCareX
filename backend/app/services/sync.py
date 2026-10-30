@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
+    PatientSearchTerm,
     AllergyRecord,
     AuditLog,
     ClinicalNote,
@@ -405,6 +406,44 @@ class SyncService:
                 entity=entity,
             )
 
+
+    # ------------------------------------------------- dual-write (E2E step 2)
+
+    def _store_sealed_content(self, patient: Patient, operation: SyncOperationIn) -> None:
+        """
+        Records the clinic-key-encrypted copy of this patient, and the keyed
+        search-term hashes that let the server match searches without reading
+        the terms.
+
+        Both are optional: a device with no clinic key sends neither and
+        synchronizes exactly as before. While dual-write is in effect the
+        plaintext columns remain authoritative, so nothing here changes what
+        a reader sees.
+        """
+        if operation.sealed_content is not None:
+            patient.content_ciphertext = operation.sealed_content.ciphertext
+            patient.content_iv = operation.sealed_content.iv
+            patient.content_key_epoch = operation.sealed_content.key_epoch
+
+        if operation.search_terms:
+            # The device sends the full set for the record, so replacing is
+            # correct: a term removed by an edit must stop matching.
+            self.db.query(PatientSearchTerm).filter(
+                PatientSearchTerm.patient_id == patient.id
+            ).delete(synchronize_session=False)
+            seen: set[str] = set()
+            for term in operation.search_terms:
+                if term in seen:
+                    continue
+                seen.add(term)
+                self.db.add(
+                    PatientSearchTerm(
+                        clinic_id=self.clinic_id,
+                        patient_id=patient.id,
+                        term=term,
+                    )
+                )
+
     # --------------------------------------------------------------- patients
 
     def _patient_create(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
@@ -423,6 +462,8 @@ class SyncService:
         data = PatientCreate.model_validate(payload)
         patient = PatientRepository(self.db).create(self.clinic_id, self.user.id, data)
         self.db.flush()
+        self._store_sealed_content(patient, operation)
+        self.db.flush()
         return _dump(PatientRead.model_validate(patient)), patient.version
 
     def _patient_update(self, operation: SyncOperationIn) -> tuple[dict[str, Any], int]:
@@ -433,6 +474,8 @@ class SyncService:
         self._check_version(patient.version, expected, snapshot)
         data = PatientUpdate.model_validate(payload)
         PatientRepository(self.db).update(patient, data)
+        self.db.flush()
+        self._store_sealed_content(patient, operation)
         self.db.flush()
         return _dump(PatientRead.model_validate(patient)), patient.version
 

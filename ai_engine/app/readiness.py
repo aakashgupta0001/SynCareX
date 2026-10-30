@@ -71,14 +71,16 @@ def list_tesseract_languages(binary: str | None) -> list[str]:
 
 
 def runtime_paths(settings: Settings) -> dict[str, str | None]:
+    llama_runtime = (
+        "python:llama_cpp"
+        if importlib.util.find_spec("llama_cpp") is not None
+        else resolve_runtime(settings.llama_binary, "llama-cli")
+    )
     return {
         "whisper": resolve_runtime(settings.whisper_binary, "whisper-cli"),
         "tesseract": resolve_runtime(settings.tesseract_binary, "tesseract"),
-        "llama": (
-            "python:llama_cpp"
-            if importlib.util.find_spec("llama_cpp") is not None
-            else None
-        ),
+        "llama": llama_runtime,
+        "ffmpeg": resolve_runtime(settings.ffmpeg_binary, "ffmpeg"),
     }
 
 
@@ -106,6 +108,10 @@ def build_status(settings: Settings) -> EngineStatus:
                 languages=list_tesseract_languages(runtimes["tesseract"]),
             ),
             "llama": RuntimeStatus(available=bool(runtimes["llama"]), executable=runtimes["llama"]),
+            "ffmpeg": RuntimeStatus(
+                available=bool(runtimes["ffmpeg"]),
+                executable=runtimes["ffmpeg"],
+            ),
         },
     )
 

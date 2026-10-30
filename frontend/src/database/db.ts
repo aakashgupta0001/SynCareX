@@ -20,6 +20,7 @@ import type {
   SyncConflict,
   SyncOperation,
   SearchIndexRow,
+  CachedClinicKeyRow,
 } from "./types";
 
 export const DATABASE_NAME = "syncarex-local";
@@ -58,6 +59,8 @@ class SynCareXDatabase extends Dexie {
   aiBlobs!: EntityTable<LocalAIBlob, "id">;
   /** Blind trigram index for patient search; keyed hashes only. */
   searchIndex!: Table<SearchIndexRow, number>;
+  /** The clinic key, cached wrapped. Useless without the passphrase. */
+  clinicKeys!: Table<CachedClinicKeyRow, string>;
   integrityFindings!: EntityTable<IntegrityFinding, "id">;
   passports!: EntityTable<EmergencyPassportRecord, "id">;
   referrals!: EntityTable<ReferralRecord, "id">;
@@ -252,6 +255,44 @@ class SynCareXDatabase extends Dexie {
       // through [ownerId+term]; patientId supports replacing a
       // record's rows on every write.
       searchIndex: "++id, patientId, ownerId, [ownerId+term]",
+    });
+
+    this.version(8).stores({
+      patients: "&id, ownerId, updatedAt, archivedAt, [ownerId+updatedAt]",
+      patientIdentifiers: "&id, ownerId, patientId, [patientId+ownerId]",
+      consultations: "&id, ownerId, patientId, updatedAt, [patientId+ownerId]",
+      clinicalNotes:
+        "&id, ownerId, patientId, consultationId, updatedAt, [consultationId+ownerId]",
+      observations: "&id, ownerId, patientId, consultationId, updatedAt",
+      allergies: "&id, ownerId, patientId, updatedAt",
+      medications: "&id, ownerId, patientId, updatedAt",
+      documents: "&id, ownerId, patientId, consultationId, createdAt",
+      documentBlobs: "&id, ownerId, patientId",
+      localUsers: "&id, email, userId",
+      devices: "&id, &deviceId",
+      syncOperations:
+        "&operationId, &idempotencyKey, &dedupeKey, ownerId, status, entityId, entityType, createdAt, nextAttemptAt, [ownerId+status]",
+      syncConflicts: "&id, ownerId, entityId, status, detectedAt",
+      auditEvents: "&id, ownerId, entityId, createdAt, synced",
+      localSettings: "&key",
+      aiArtifacts: "&id, ownerId, kind, status, createdAt, [ownerId+kind]",
+      aiBlobs: "&id, ownerId, createdAt",
+      integrityFindings:
+        "&id, ownerId, ruleId, category, severity, entityId, status, detectedAt, [ownerId+status]",
+      passports: "&id, ownerId, patientId, tokenHash, expiresAt, createdAt",
+      referrals:
+        "&id, ownerId, patientId, status, priority, receivingClinicId, createdAt, updatedAt",
+      followUps:
+        "&id, ownerId, patientId, status, priority, scheduledAt, [ownerId+status]",
+      transfers:
+        "&id, ownerId, transferId, sourceClinicId, targetClinicId, status, createdAt",
+      pairedClinics: "&id, clinicId, status",
+      passportRevocations: "&tokenHash, revokedAt",
+      // ++id because one patient has many trigram rows. Lookups go
+      // through [ownerId+term]; patientId supports replacing a
+      // record's rows on every write.
+      searchIndex: "++id, patientId, ownerId, [ownerId+term]",
+      clinicKeys: "&id, clinicId",
     });
   }
 }

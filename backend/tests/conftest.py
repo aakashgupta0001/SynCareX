@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Any
 
 import httpx
@@ -52,11 +53,14 @@ def api_client(tmp_path) -> Any:
     settings = get_settings()
     original_storage = settings.document_storage_dir
     settings.document_storage_dir = tmp_path / "documents"
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    test_database_url = os.environ.get("TEST_DATABASE_URL", "sqlite://")
+    engine_options: dict[str, Any] = {}
+    if test_database_url.startswith("sqlite"):
+        engine_options = {
+            "connect_args": {"check_same_thread": False},
+            "poolclass": StaticPool,
+        }
+    engine = create_engine(test_database_url, **engine_options)
     Base.metadata.create_all(engine)
     test_sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
@@ -145,6 +149,9 @@ def api_client(tmp_path) -> Any:
 
     yield {
         "client": APIClient(),
+        # Lets a test inspect stored rows directly, which is the only
+        # way to assert that the server kept ciphertext verbatim.
+        "session_factory": test_sessions,
         "clinic_id": clinic_id,
         "other_clinic_id": other_clinic_id,
         "user_id": user_id,

@@ -11,6 +11,8 @@ class Settings:
     tesseract_binary: str | None
     allowed_origins: tuple[str, ...]
     max_upload_bytes: int = 25 * 1024 * 1024
+    llama_binary: str | None = None
+    ffmpeg_binary: str | None = None
 
 
 def get_settings() -> Settings:
@@ -34,4 +36,6 @@ def get_settings() -> Settings:
         whisper_binary=os.environ.get("SYNCAREX_WHISPER_BIN"),
         tesseract_binary=os.environ.get("SYNCAREX_TESSERACT_BIN"),
         allowed_origins=origins,
+        llama_binary=os.environ.get("SYNCAREX_LLAMA_BIN"),
+        ffmpeg_binary=os.environ.get("SYNCAREX_FFMPEG_BIN"),
     )

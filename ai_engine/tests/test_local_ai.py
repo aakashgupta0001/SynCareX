@@ -1,7 +1,9 @@
 from dataclasses import replace
 import hashlib
 import io
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 import pytest
@@ -193,3 +195,165 @@ def test_translation_is_declared_as_english_only(settings: Settings) -> None:
     assert TranscriptionResult(
         text="spoken text", language="hi", model_id="whisper-tiny"
     ).translated_to is None
+
+
+def test_llama_cli_produces_schema_constrained_extraction(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.providers import _extract_with_llama_cli
+
+    def run(command, **kwargs):
+        assert command[command.index("--json-schema-file") + 1].endswith("schema.json")
+        schema = json.loads(
+            Path(command[command.index("--json-schema-file") + 1]).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert schema["required"] == ["facts"]
+        assert command[command.index("--no-display-prompt"):] == [
+            "--no-display-prompt",
+            "--single-turn",
+            "--simple-io",
+            "--color",
+            "off",
+        ]
+        assert "source text" in command[command.index("-p") + 1]
+        assert kwargs["timeout"] == 600
+        return SimpleNamespace(
+            stdout='{"facts":[]}',
+            stderr="",
+        )
+
+    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
+    content = _extract_with_llama_cli(
+        "llama-cli.exe",
+        settings.model_dir / "model.gguf",
+        "Synthetic source text",
+    )
+    assert content == '{"facts":[]}'
+
+
+def test_llama_cli_output_parser_skips_runtime_diagnostics() -> None:
+    from ai_engine.app.providers import _json_object_from_output
+
+    assert _json_object_from_output(
+        "loading model...\nassistant:\n{\"facts\":[]}\n"
+    ) == '{"facts":[]}'
+
+
+def test_llama_cli_is_detected_when_python_bindings_are_unavailable(
+    settings: Settings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.readiness import runtime_paths
+
+    binary = tmp_path / "llama-cli.exe"
+    binary.touch()
+    monkeypatch.setattr("ai_engine.app.readiness.importlib.util.find_spec", lambda _: None)
+    configured = replace(settings, llama_binary=str(binary))
+
+    assert runtime_paths(configured)["llama"] == str(binary)
+
+
+def test_extraction_dispatches_to_cli_and_validates_evidence(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.catalog import MODEL_BY_ID
+    from ai_engine.app.providers import extract_facts
+
+    source = "Synthetic note: patient reports headache."
+    expected = json.dumps(
+        {
+            "facts": [
+                {
+                    "category": "symptom",
+                    "value": "headache",
+                    "evidence": "reports headache",
+                    "confidence": 0.9,
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.importlib.util.find_spec", lambda _: None
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers._require_model",
+        lambda *_: (MODEL_BY_ID["qwen-0.5b-q4"], settings.model_dir / "model.gguf"),
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {"llama": "llama-cli.exe"},
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers._extract_with_llama_cli",
+        lambda *_: expected,
+    )
+
+    result = extract_facts(settings, "qwen-0.5b-q4", source)
+
+    assert result.requires_review is True
+    assert result.model_id == "qwen-0.5b-q4"
+    assert result.facts[0].evidence == "reports headache"
+
+
+def test_webm_transcription_converts_audio_before_whisper(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_engine.app.catalog import MODEL_BY_ID
+    from ai_engine.app.providers import transcribe
+
+    whisper_model = MODEL_BY_ID["whisper-tiny"]
+    model_path = settings.model_dir / whisper_model.filename
+    monkeypatch.setattr(
+        "ai_engine.app.providers._require_model",
+        lambda *_: (whisper_model, model_path),
+    )
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _: {
+            "whisper": "whisper-cli.exe",
+            "ffmpeg": "ffmpeg.exe",
+            "llama": None,
+            "tesseract": None,
+        },
+    )
+    commands: list[list[str]] = []
+
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[0] == "ffmpeg.exe":
+            Path(command[-1]).write_bytes(b"synthetic wav")
+        elif command[0] == "whisper-cli.exe":
+            output_prefix = Path(command[command.index("-of") + 1])
+            output_prefix.with_suffix(".json").write_text(
+                json.dumps(
+                    {
+                        "transcription": [{"text": "synthetic spoken text"}],
+                        "result": {"language": "en"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+        return SimpleNamespace(stdout="", stderr="")
+
+    monkeypatch.setattr("ai_engine.app.providers.subprocess.run", run)
+    result = transcribe(
+        settings,
+        "whisper-tiny",
+        "auto",
+        "recording.webm",
+        b"synthetic webm",
+        task="translate",
+    )
+
+    assert result.text == "synthetic spoken text"
+    assert result.translated_to == "en"
+    assert commands[0][0] == "ffmpeg.exe"
+    assert commands[0][commands[0].index("-ar") + 1] == "16000"
+    assert commands[1][commands[1].index("-f") + 1].endswith("converted.wav")
+    assert "-tr" in commands[1]

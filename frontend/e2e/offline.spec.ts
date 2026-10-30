@@ -3,6 +3,14 @@ import { expect, test, type Page } from "@playwright/test";
 const EMAIL = "e2e.clinician@example.com";
 const PASSWORD = "synthetic-e2e-passphrase";
 
+// Playwright reuses an already-running e2e server, and that server keeps
+// its database between runs, so fixed names would collide with records an
+// earlier run synced. Scoping them to the run keeps the assertions strict.
+const RUN = Date.now().toString().slice(-6);
+const ONLINE_PATIENT = `Online Synthetic ${RUN}`;
+const OFFLINE_PATIENT = `Offline Synthetic ${RUN}`;
+const BACKEND_DOWN_PATIENT = `Backend Down ${RUN}`;
+
 async function signIn(page: Page) {
   await page.goto("/login");
   await page.getByLabel("Work email").fill(EMAIL);
@@ -47,7 +55,7 @@ test.describe("offline-first clinical workflow", () => {
     await waitForServiceWorker(page);
 
     // 1. A patient created while online reaches the server.
-    await registerPatient(page, "Online Synthetic Patient", "Connected Village");
+    await registerPatient(page, ONLINE_PATIENT, "Connected Village");
     await page.getByRole("link", { name: "Sync center" }).click();
     await expect(page.getByRole("heading", { name: "Sync center" })).toBeVisible();
     await expect(page.getByText("acknowledged", { exact: false }).first()).toBeVisible();
@@ -64,7 +72,7 @@ test.describe("offline-first clinical workflow", () => {
     await expect(page.getByRole("heading", { name: "Good day" })).toBeVisible();
 
     // 4. A patient created with no connectivity is saved locally.
-    await registerPatient(page, "Offline Synthetic Patient", "Remote Village");
+    await registerPatient(page, OFFLINE_PATIENT, "Remote Village");
     await expect(
       page.getByText(/Saved securely on this device/i).first(),
     ).toBeVisible();
@@ -72,7 +80,7 @@ test.describe("offline-first clinical workflow", () => {
     // 5. Local search finds the offline record.
     await page.getByRole("link", { name: "Patients" }).click();
     await page.getByLabel("Search patients").fill("Remote Village");
-    await expect(page.getByText("Offline Synthetic Patient")).toBeVisible();
+    await expect(page.getByText(OFFLINE_PATIENT)).toBeVisible();
     await expect(page.getByText("Waiting to sync").first()).toBeVisible();
 
     // 6. The queue and the records survive a full page restart while offline.
@@ -82,7 +90,7 @@ test.describe("offline-first clinical workflow", () => {
     await page.getByRole("button", { name: /unlock local workspace/i }).click();
     await expect(page.getByRole("heading", { name: "Good day" })).toBeVisible();
     await page.getByRole("link", { name: "Patients" }).click();
-    await expect(page.getByText("Offline Synthetic Patient")).toBeVisible();
+    await expect(page.getByText(OFFLINE_PATIENT)).toBeVisible();
 
     await page.getByRole("link", { name: "Sync center" }).click();
     await expect(page.getByText("Waiting to sync").first()).toBeVisible();
@@ -112,7 +120,7 @@ test.describe("offline-first clinical workflow", () => {
     await context.route("**/health", (route) => route.abort("connectionrefused"));
 
     await page.getByRole("link", { name: "Patients" }).click();
-    await registerPatient(page, "Backend Down Patient", "Fallback Village");
+    await registerPatient(page, BACKEND_DOWN_PATIENT, "Fallback Village");
     await expect(
       page.getByText(/Saved securely on this device/i).first(),
     ).toBeVisible();

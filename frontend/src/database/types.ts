@@ -538,3 +538,17 @@ export interface SearchIndexRow {
   patientId: string;
   term: string;
 }
+/**
+ * The clinic data key as stored on this device: still wrapped, so the row is
+ * useless to anyone who cannot derive the passphrase key.
+ */
+export interface CachedClinicKeyRow {
+  id: string;
+  clinicId: string;
+  keyEpoch: number;
+  wrappedKey: string;
+  wrapIv: string;
+  kdfSalt: string;
+  kdfIterations: number;
+  cachedAt: string;
+}

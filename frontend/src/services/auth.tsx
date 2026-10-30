@@ -20,6 +20,7 @@ import {
 } from "../security/localVault";
 import { getLocalDeviceId, markDeviceAuthorized } from "../offline/device";
 import { auditRepository } from "../repositories/auditRepository";
+import { lockClinicKey, unlockClinicKey } from "../security/clinicKey";
 import { requestPersistentStorage } from "../offline/storage";
 
 export type SessionMode = "online" | "offline";
@@ -70,6 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const lockNow = useCallback((reason?: string) => {
     setAccessToken(null);
     lockLocalVault();
+    lockClinicKey();
     setSession(null);
     setLockNotice(
       reason ??
@@ -141,6 +143,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         void requestPersistentStorage();
+
+        const clinicKey = await unlockClinicKey(password, {
+          online: true,
+          clinicId: user.clinic_id,
+          userId: user.id,
+        });
+        if (!clinicKey.available && clinicKey.reason) {
+          warning = warning ? `${warning} ${clinicKey.reason}` : clinicKey.reason;
+        }
+
         emailRef.current = user.email;
         setLockNotice(null);
         setSession({
@@ -165,6 +177,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const identity = await unlockLocalVault(email, password);
       setAccessToken(null);
+      await unlockClinicKey(password, {
+        online: false,
+        clinicId: "",
+        userId: identity.userId,
+      });
       emailRef.current = identity.email;
       setLockNotice(null);
       setSession({
@@ -220,6 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setAccessToken(null);
         lockLocalVault();
+        lockClinicKey();
         setSession(null);
         setLockNotice(null);
         emailRef.current = null;

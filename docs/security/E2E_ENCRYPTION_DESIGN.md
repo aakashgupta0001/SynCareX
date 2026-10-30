@@ -51,6 +51,24 @@ must read each other's records. Per-record keys wrapped to every user would
 mean re-wrapping on every membership change and would not improve the threat
 model meaningfully, because any member can read everything anyway.
 
+### Known gap: wrapping for a second user
+
+A device can only wrap the clinic key for a user whose key-encryption key it
+can derive, which means the user's passphrase. So the device that creates the
+key can wrap it for **itself**, and there is no way for it to wrap the key for
+a colleague who has never signed in — their KEK does not exist yet, and their
+passphrase is rightly unknown.
+
+The fix is per-user identity keypairs: each user publishes a public key
+(private half encrypted under their own KEK), and any holder of the clinic
+key wraps it to that public key without knowing anything secret about them.
+
+This gap **does not block dual-write**, where plaintext remains authoritative
+and encryption is additive, so a user without a wrap keeps working normally.
+It **does** block the later steps: the plaintext columns cannot be dropped
+until every clinician in a clinic can obtain the key. Treat identity keypairs
+as a prerequisite for step 4.
+
 ### Rotation and revocation
 
 - **Passphrase change**: re-wrap the CDK with the new KEK. No record touched.
@@ -68,7 +86,7 @@ clinical plaintext that stops working the moment records are ciphertext.
 
 | # | Site | Use | Mitigation |
 |---|---|---|---|
-| 1 | `repositories/patients.py` (`ilike` on `full_name`, `patient_number`, `village`) | Server-side patient search | **Server-side blind index.** Devices compute HMAC trigrams with a key derived from the CDK and upload them; the server matches hashes. The client-side trigram index already implemented in `src/offline/searchIndex.ts` is the same scheme and can be reused directly |
+| 1 | `repositories/patients.py` (`ilike` on `full_name`, `patient_number`, `village`) | Server-side patient search | **Done.** Server-side blind index: devices send HMAC trigrams keyed from the CDK and the server matches hash against hash. Reuses the trigram scheme from `src/offline/searchIndex.ts` |
 | 2 | `services/continuity.py` (~l.98–142) | Emergency passport summary built server-side from name, emergency contact and history | **Move generation to the device.** The device has the plaintext; it builds the summary, encrypts it, and uploads the ciphertext plus the token hash. The server becomes a store and a revocation list |
 | 3 | `services/continuity.py` (~l.295) | Referral carries `patient_full_name` as a reference | Store an encrypted reference. The server only needs `patient_id` for routing |
 | 4 | `services/continuity.py` (~l.674) | Transfer export embeds the exporting clinician's name | Clinician identity is account data rather than patient data; it may stay plaintext, or move into the encrypted envelope with the rest of the package |
@@ -121,16 +139,36 @@ import and search features would break silently.
 
 ## 7. Implementation status
 
-**Step 1 is implemented.** `clinic_keys` stores one wrapped CDK per user; the
-API lets an authenticated user fetch their wrap and lets the first device in
-a clinic publish the initial wraps. The server never receives an unwrapped
-CDK, and a user cannot read another clinic's wrap.
+**Step 1 — key material: implemented.** `clinic_key_wraps` stores one
+wrapped CDK per user. An authenticated user may fetch only their own wrap,
+and only for their own clinic. The server never receives an unwrapped CDK.
 
-**Steps 2 to 5 are not implemented.** No clinical record is end-to-end
-encrypted yet. The key material exists and is tested, and nothing in the
-application depends on it, so it currently protects nothing. That is stated
-here deliberately so a reader does not mistake the presence of the table for
-the property.
+**Step 2 — dual-write: implemented for patients.** A device that holds the
+clinic key sends, alongside the plaintext payload, an AES-GCM envelope of the
+same content and the keyed hashes of its searchable trigrams. The server
+stores all three. Both encrypted fields are optional, so a device without the
+key synchronizes exactly as before — verified by a test. Plaintext remains
+authoritative, so this is reversible.
+
+Client key handling lives in `src/security/clinicKey.ts`: the wrapped key is
+cached on the device and unwrapped at unlock, online or offline, so
+synchronization after an offline period can still encrypt. The clinic key is
+kept separate from the vault key on purpose — the vault key protects records
+on the device, the clinic key protects them on the server, so a device
+compromise and a server compromise stay distinct problems.
+
+**Step 3 — first reader moved: implemented for patient search.** `GET
+/patients` accepts `search_terms`, keyed hashes of the query's trigrams
+computed on the device. The server intersects hashes and never receives the
+query. The plaintext `ilike` path is still present for records that predate
+the index and must be removed at step 5. Hashes are base64url, because a
+standard-base64 `+` is decoded as a space in a query string.
+
+**Steps 3 (remaining readers), 4 and 5 are not implemented.** The passport
+summary, referral reference, transfer export and transfer collision detection
+still read plaintext, and the plaintext columns are still authoritative, so
+**no clinical record is yet unreadable to the operator**. Stated plainly so
+nobody mistakes the presence of ciphertext for the property.
 
 ## 8. Honest limitations of the end state
 

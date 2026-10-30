@@ -17,12 +17,17 @@ router = APIRouter(prefix="/patients", tags=["patients"])
 @router.get("", response_model=PatientPage)
 def list_patients(
     search: str | None = Query(default=None, max_length=120),
+    # Keyed hashes of the query's trigrams, computed on the device. Supplying
+    # these lets the server answer a search without receiving the query.
+    search_terms: list[str] | None = Query(default=None, max_length=64),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     user: User = Depends(require_permission("patients.read")),
     db: Session = Depends(get_db),
 ) -> PatientPage:
-    items, total = PatientRepository(db).list(user.clinic_id, search, page, page_size)
+    items, total = PatientRepository(db).list(
+        user.clinic_id, search, page, page_size, search_terms
+    )
     return PatientPage(
         items=items,
         page=page,

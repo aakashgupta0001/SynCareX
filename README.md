@@ -15,7 +15,7 @@ SynCareX is a development foundation for offline-first clinical documentation. I
 - **Backend API:** Login/refresh/logout/session profile, clinic-scoped patient CRUD/search/pagination, audit listing, health and OpenAPI documentation. Access control is enforced on the API.
 - **Optional AI engine:** A separate loopback-only local service provides device readiness, verified model downloads, speech-to-text, image OCR, evidence-linked structured extraction, clinician review, local history retrieval and editable source-linked summaries. Inference is available only when the corresponding runtime and model are installed; none are bundled or downloaded automatically.
 
-The operation queue is durable across restarts and covers patients, identifiers, consultations, clinical notes, observations, allergies, medications and documents. Push uses durable idempotency and reports per-operation outcomes; a clinic-scoped pull feed applies encrypted pages with a local checkpoint. Concurrent changes are preserved for clinician review rather than automatically merged. Document bytes are checksum-verified but transfer is whole-file, not resumable. Two-device acceptance is now verified in a real browser: two independent persistent profiles converge, and concurrent edits to the same field are preserved for clinician review (8/8 checks, `frontend/e2e/two-device-sync.spec.ts`). PostgreSQL concurrency remains unverified; all testing to date used SQLite. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), the [offline engine](./docs/offline/OFFLINE_ENGINE.md) and the [synchronization design](./docs/synchronization/SYNC_ENGINE_DESIGN.md) for precise limitations.
+The operation queue is durable across restarts and covers patients, identifiers, consultations, clinical notes, observations, allergies, medications and documents. Push uses durable idempotency and reports per-operation outcomes; a clinic-scoped pull feed applies encrypted pages with a local checkpoint. Concurrent changes are preserved for clinician review rather than automatically merged. Document bytes are checksum-verified but transfer is whole-file, not resumable. Two-device acceptance is now verified in a real browser: two independent persistent profiles converge, and concurrent edits to the same field are preserved for clinician review (8/8 checks, `frontend/e2e/two-device-sync.spec.ts`). PostgreSQL startup and migration are covered by the PostgreSQL 17 CI workflow; this machine's local tests still use SQLite. See [PROJECT_STATUS.md](./PROJECT_STATUS.md), the [offline engine](./docs/offline/OFFLINE_ENGINE.md) and the [synchronization design](./docs/synchronization/SYNC_ENGINE_DESIGN.md) for precise limitations.
 
 The local integrity guardian performs explicit on-device scans for conservative
 duplicate patient candidates (normalized names, limited Devanagari
@@ -77,7 +77,7 @@ python -m pip install -r requirements.txt
 python -m alembic upgrade head
 ```
 
-The initial migration has been applied and checked against the local SQLite development database. PostgreSQL startup/migration has not yet been verified on this machine.
+The initial migration has been applied and checked against the local SQLite development database. PostgreSQL startup and migration are exercised by the GitHub Actions workflow at [backend-postgres-tests.yml](./.github/workflows/backend-postgres-tests.yml); they have not yet been run locally on this machine.
 
 Seed synthetic clinic roles and the development administrator. Set `SEED_ADMIN_PASSWORD` in the current shell to a unique password of at least 12 characters; do not put a real or reused password in source control:
 
@@ -128,6 +128,13 @@ The script generates a temporary bearer token and binds the service to
 keeps it in memory only. Model downloads require an explicit user action and
 are size-limited and SHA-256 verified. Install Whisper.cpp, Tesseract, or the
 optional `llama-cpp-python` runtime separately to enable their capabilities.
+On Windows, `.\ai_engine\setup_local_ai.ps1` installs pinned CPU builds of
+Whisper.cpp and llama.cpp plus Tesseract and FFmpeg; it does not download model
+weights. The transcription flow supports both saved audio and in-browser
+recordings, including Whisper's English translation task. The PWA is responsive
+and installable on mobile; its offline database is encrypted IndexedDB rather
+than native SQLite. Check the device readiness panel before any model download
+or inference.
 Check the device readiness panel before any model download or inference. See
 [local AI setup and limitations](./ai_engine/README.md).
 

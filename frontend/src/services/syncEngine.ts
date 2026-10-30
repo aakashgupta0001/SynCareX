@@ -21,6 +21,9 @@ import { auditRepository } from "../repositories/auditRepository";
 import { syncPullRepository } from "../repositories/syncPullRepository";
 import { getLocalDeviceId, markDeviceAuthorized, recordServerContact } from "../offline/device";
 import { decryptLocalValue, isVaultUnlocked } from "../security/localVault";
+import { sealForServer, serverIndexTerms } from "../security/clinicKey";
+import { patientTrigrams } from "../offline/searchIndex";
+import type { LocalPatient } from "../database/types";
 import type { SyncOperation } from "../database/types";
 
 export const SYNC_BATCH_SIZE = 25;
@@ -53,6 +56,14 @@ let inFlight: Promise<SyncOutcome> | null = null;
  */
 async function toRequest(operation: SyncOperation): Promise<SyncOperationRequest> {
   const payload = await decryptLocalValue<Record<string, unknown>>(operation.payload);
+  // Dual-write. Both are omitted when no clinic key is loaded, which keeps a
+  // device without one working exactly as before.
+  const sealed =
+    operation.entityType === "patient" ? await sealForServer(payload) : null;
+  const terms =
+    operation.entityType === "patient" && sealed
+      ? await serverIndexTerms(patientTrigrams(payload as unknown as LocalPatient))
+      : [];
   return {
     operation_id: operation.operationId,
     idempotency_key: operation.idempotencyKey,
@@ -65,6 +76,16 @@ async function toRequest(operation: SyncOperation): Promise<SyncOperationRequest
     base_version: operation.baseVersion,
     local_version: operation.localVersion,
     payload: serializePayload(operation, payload),
+    ...(sealed
+      ? {
+          sealed_content: {
+            ciphertext: sealed.ciphertext,
+            iv: sealed.iv,
+            key_epoch: sealed.keyEpoch,
+          },
+        }
+      : {}),
+    ...(terms.length ? { search_terms: terms } : {}),
     created_at: operation.createdAt,
   };
 }

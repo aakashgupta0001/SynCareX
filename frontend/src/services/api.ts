@@ -113,6 +113,12 @@ export function mapPatientChangesToApi(
   );
 }
 
+export interface SealedContentRequest {
+  ciphertext: string;
+  iv: string;
+  key_epoch: number;
+}
+
 export interface SyncOperationRequest {
   operation_id: string;
   idempotency_key: string;
@@ -125,6 +131,11 @@ export interface SyncOperationRequest {
   base_version: number;
   local_version: number;
   payload: Record<string, unknown>;
+  // Dual-write: the same content encrypted with the clinic key, and
+  // keyed hashes of its searchable trigrams. Both omitted when this
+  // device has no clinic key.
+  sealed_content?: SealedContentRequest;
+  search_terms?: string[];
   created_at: string;
 }
 
@@ -186,6 +197,34 @@ export interface DocumentResponse {
   description: string | null;
   content_received_at: string | null;
   created_at: string;
+}
+
+export interface ClinicKeyWrapResponse {
+  clinic_id: string;
+  user_id: string;
+  key_epoch: number;
+  wrapped_key: string;
+  wrap_iv: string;
+  kdf_salt: string;
+  kdf_iterations: number;
+  created_at: string;
+}
+
+export interface ClinicKeyStatusResponse {
+  clinic_id: string;
+  key_epoch: number | null;
+  wrapped_for_this_user: boolean;
+  user_count_with_access: number;
+  records_encrypted: boolean;
+}
+
+export interface ClinicKeyWrapInput {
+  user_id: string;
+  key_epoch: number;
+  wrapped_key: string;
+  wrap_iv: string;
+  kdf_salt: string;
+  kdf_iterations: number;
 }
 
 interface PatientPage {
@@ -348,9 +387,18 @@ export const api = {
     await apiRequest<void>("/auth/logout", { method: "POST" }, false);
   },
 
-  async listPatients(search = ""): Promise<PatientPage> {
+  /**
+   * Lists patients. When `searchTerms` is supplied the query itself is never
+   * sent: the server matches keyed hashes, which is what keeps search
+   * working once it can no longer read names.
+   */
+  async listPatients(search = "", searchTerms: string[] = []): Promise<PatientPage> {
     const params = new URLSearchParams({ page: "1", page_size: "100" });
-    if (search.trim()) params.set("search", search.trim());
+    if (searchTerms.length) {
+      for (const term of searchTerms) params.append("search_terms", term);
+    } else if (search.trim()) {
+      params.set("search", search.trim());
+    }
     return apiRequest<PatientPage>(`/patients?${params}`);
   },
 
@@ -469,6 +517,20 @@ export const api = {
     total: number;
   }> {
     return apiRequest(`/documents?patient_id=${encodeURIComponent(patientId)}`);
+  },
+
+  /** This user's own wrapped clinic key. Opaque ciphertext. */
+  async getClinicKeyWrap(): Promise<ClinicKeyWrapResponse> {
+    return apiRequest<ClinicKeyWrapResponse>("/keys/clinic");
+  },
+
+  async publishClinicKeyWraps(
+    wraps: ClinicKeyWrapInput[],
+  ): Promise<ClinicKeyStatusResponse> {
+    return apiRequest<ClinicKeyStatusResponse>("/keys/clinic", {
+      method: "POST",
+      body: JSON.stringify({ wraps }),
+    });
   },
 
   async listAudit(): Promise<{
