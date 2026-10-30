@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import App from "../App";
 import { db } from "../database/db";
-import { allergyRepository } from "../repositories/consultationRepository";
+import { allergyRepository, clinicalNoteRepository } from "../repositories/consultationRepository";
 import { patientRepository } from "../repositories/patientRepository";
 import { syncRepository } from "../repositories/syncRepository";
 import { AuthProvider } from "../services/auth";
@@ -205,6 +205,93 @@ describe("offline-first workspace", () => {
     await screen.findByRole("heading", { name: "AI workspace" });
     expect(await screen.findByRole("heading", { name: "Local patient-history retrieval" })).toBeTruthy();
     expect(screen.getByText(/optional; patient care workflows are not blocked/)).toBeTruthy();
+  });
+
+  it("generates a source-linked summary and adds it to the record only after review", async () => {
+    await signInOffline();
+    const patient = await patientRepository.createLocal({
+      ...syntheticPatient,
+      fullName: "Summary Patient",
+    });
+    await allergyRepository.createLocal({
+      patientId: patient.id,
+      substance: "Penicillin",
+      reaction: "Rash",
+      severity: "moderate",
+    });
+
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    let summaryRequest: { new_source: string; history: string[] } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/v1/status")) {
+          return json({
+            ready: true,
+            token_configured: true,
+            operating_system: "Test OS",
+            processor: "Test CPU",
+            logical_cores: 4,
+            accelerator_note: "CPU only",
+            model_directory: "models",
+            total_ram_mb: 8192,
+            available_ram_mb: 4096,
+            free_disk_mb: 10000,
+            runtimes: {},
+          });
+        }
+        if (url.endsWith("/api/v1/models")) return json([]);
+        if (url.endsWith("/api/v1/summaries")) {
+          summaryRequest = JSON.parse(String(init?.body));
+          return json({
+            items: [
+              { section: "presenting_complaint", text: "Fever for 3 days", sources: ["S1"], support: "ok" },
+              { section: "allergies", text: "Penicillin allergy (rash)", sources: ["H1"], support: "ok" },
+            ],
+            source_lines: [
+              { id: "S1", text: "Fever since 3 days." },
+              { id: "H1", text: "Recorded allergy: Penicillin; reaction: Rash; severity: moderate" },
+            ],
+            model_id: "qwen-0.5b-q4",
+            dropped: 0,
+            requires_review: true,
+          });
+        }
+        throw new Error("Offline in this test.");
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "AI workspace" }));
+    await screen.findByRole("heading", { name: "AI workspace" });
+    fireEvent.change(await screen.findByLabelText("Local patient"), {
+      target: { value: patient.id },
+    });
+    fireEvent.change(screen.getByLabelText("Source text"), {
+      target: { value: "Fever since 3 days." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /generate ai clinical summary/i }));
+
+    expect(await screen.findByDisplayValue(/Presenting complaint:/)).toBeTruthy();
+    // The allergy was never mentioned in the visit but still reached the model.
+    expect(summaryRequest!.history.some((line) => line.includes("Penicillin"))).toBe(true);
+    expect(summaryRequest!.new_source).toBe("Fever since 3 days.");
+
+    const add = screen.getByRole("button", { name: /add summary to patient record/i });
+    expect(add.hasAttribute("disabled")).toBe(true);
+    fireEvent.click(screen.getByLabelText(/I have reviewed this summary/));
+    await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(add);
+
+    expect(await screen.findByText(/Summary added to Summary Patient's record/)).toBeTruthy();
+    const notes = await clinicalNoteRepository.listByPatientLocal(patient.id);
+    expect(notes.some((note) => note.body.includes("Fever for 3 days [S1]"))).toBe(true);
+    const queued = await db.syncOperations.toArray();
+    expect(queued.some((operation) => operation.entityType === "clinicalNote")).toBe(true);
   });
 
   it("exposes accessible names for Phase 6 form controls", async () => {

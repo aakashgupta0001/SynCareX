@@ -76,6 +76,13 @@ still requires clinician review. The editable summary feature is constructed
 only from facts the user selects and retains their source quotes; it does not
 generate diagnoses, recommendations, or prescriptions.
 
+- Clinical summaries (`POST /api/v1/summaries`) use the same extraction model.
+  The device sends the new visit text and up to 60 ranked history lines
+  (6,000 characters each side). The engine numbers every line, makes the model
+  cite line IDs, discards uncited statements and marks statements whose numbers
+  or words are not in the cited lines as `check`. The output is a draft; it
+  reaches the record only when a clinician adds it after review.
+
 ## Current limitations
 
 Model metadata, readiness reporting, verified downloads, encrypted local
