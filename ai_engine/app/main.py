@@ -12,9 +12,18 @@ import uvicorn
 from .catalog import MODEL_BY_ID
 from .config import Settings, get_settings
 from .model_manager import ModelInstallError, download_model
-from .models import EngineStatus, ExtractionResult, ModelStatus, OCRResult, TranscriptionResult
+from .models import (
+    EngineStatus,
+    ExtractionResult,
+    ModelStatus,
+    OCRResult,
+    SummaryRequest,
+    SummaryResult,
+    TranscriptionResult,
+)
 from .providers import ProviderUnavailable, extract_facts, ocr, transcribe
 from .readiness import all_model_statuses, build_status, model_status
+from .summaries import summarize
 
 logger = logging.getLogger("syncarex.ai")
 
@@ -177,6 +186,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> ExtractionResult:
         try:
             return await asyncio.to_thread(extract_facts, config, model_id, source_text)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post(
+        "/api/v1/summaries",
+        response_model=SummaryResult,
+        dependencies=[Depends(require_token)],
+        tags=["summary"],
+    )
+    async def create_summary(body: SummaryRequest) -> SummaryResult:
+        try:
+            return await asyncio.to_thread(
+                summarize,
+                config,
+                body.model_id,
+                body.new_source,
+                body.history,
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 

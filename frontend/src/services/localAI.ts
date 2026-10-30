@@ -47,6 +47,23 @@ export interface ExtractionResponse {
   requires_review: true;
 }
 
+export interface SummaryItem {
+  section: string;
+  text: string;
+  /** Line IDs: S1, S2 … for the new visit, H1, H2 … for earlier records. */
+  sources: string[];
+  /** "check" when a word or number does not appear in the cited lines. */
+  support: "ok" | "check";
+}
+
+export interface SummaryResponse {
+  items: SummaryItem[];
+  source_lines: Array<{ id: string; text: string }>;
+  model_id: string;
+  dropped: number;
+  requires_review: true;
+}
+
 const LOCAL_AI_URL = "http://127.0.0.1:8765";
 
 async function request<T>(
@@ -133,5 +150,26 @@ export const localAIClient = {
     body.set("source_text", text);
     body.set("model_id", modelId);
     return request("/api/v1/extractions", { method: "POST", body }, token);
+  },
+
+  /**
+   * Source-linked clinical summary of the new visit, using the retrieved
+   * history lines as context. The result is a draft for clinician review.
+   */
+  summarize(
+    newSource: string,
+    history: string[],
+    modelId: string,
+    token: string,
+  ): Promise<SummaryResponse> {
+    return request(
+      "/api/v1/summaries",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_id: modelId, new_source: newSource, history }),
+      },
+      token,
+    );
   },
 };

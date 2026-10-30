@@ -32,6 +32,12 @@ import { aiRepository, type DecryptedAIArtifact } from "../repositories/aiReposi
 import { patientRepository } from "../repositories/patientRepository";
 import { rankHistoryLines } from "../offline/historyRanking";
 import { buildCaseFile, CASE_FILE_REASON } from "../offline/caseFile";
+import {
+  formatSummaryDraft,
+  MAX_NEW_SOURCE_CHARS,
+  selectHistoryForSummary,
+  SUMMARY_REASON,
+} from "../offline/clinicalSummary";
 import type { LocalPatient } from "../database/types";
 import { localAIClient, type ExtractedFact, type LocalAIModel, type LocalAIStatus } from "../services/localAI";
 
@@ -81,6 +87,7 @@ export function AIWorkspacePage() {
   const [facts, setFacts] = useState<ExtractedFact[]>([]);
   const [acceptedFacts, setAcceptedFacts] = useState<Set<number>>(new Set());
   const [summary, setSummary] = useState("");
+  const [summaryReviewed, setSummaryReviewed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -221,6 +228,45 @@ export function AIWorkspacePage() {
       if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     }
 
+    /** Reads the patient's local record as plain lines for retrieval. */
+    async function loadPatientHistory(id: string) {
+      const patient = await patientRepository.getLocal(id);
+      if (!patient) throw new Error("The selected patient is no longer available locally.");
+      const [
+        consultations,
+        notes,
+        observations,
+        allergies,
+        medications,
+      ] = await Promise.all([
+        consultationRepository.listByPatientLocal(id),
+        clinicalNoteRepository.listByPatientLocal(id),
+        observationRepository.listByPatientLocal(id),
+        allergyRepository.listByPatientLocal(id),
+        medicationRepository.listByPatientLocal(id),
+      ]);
+      const lines = [
+        patient.relevantHistory && `Recorded history: ${patient.relevantHistory}`,
+        ...allergies.filter((item) => !item.enteredInErrorAt).map(
+          (item) =>
+            `Recorded allergy: ${item.substance}; reaction: ${item.reaction}; severity: ${item.severity}`,
+        ),
+        ...medications.filter((item) => !item.enteredInErrorAt).map(
+          (item) =>
+            `Recorded medication: ${item.name}; dose: ${item.dose}; frequency: ${item.frequency}`,
+        ),
+        ...observations.filter((item) => !item.enteredInErrorAt).map(
+          (item) => `Recorded observation (${item.recordedAt}): ${item.label} ${item.value} ${item.unit}`,
+        ),
+        ...notes.map((item) => `Clinical note (${item.noteType}): ${item.body}`),
+        ...consultations.map(
+          (item) =>
+            `Consultation (${item.occurredAt}): ${item.reason}; notes: ${item.notes}`,
+        ),
+      ].filter((line): line is string => Boolean(line?.trim()));
+      return { patient, lines };
+    }
+
     async function retrievePatientHistory() {
       setError("");
       setMessage("");
@@ -230,40 +276,7 @@ export function AIWorkspacePage() {
       }
       setBusy("history");
       try {
-        const patient = await patientRepository.getLocal(patientId);
-        if (!patient) throw new Error("The selected patient is no longer available locally.");
-        const [
-          consultations,
-          notes,
-          observations,
-          allergies,
-          medications,
-        ] = await Promise.all([
-          consultationRepository.listByPatientLocal(patientId),
-          clinicalNoteRepository.listByPatientLocal(patientId),
-          observationRepository.listByPatientLocal(patientId),
-          allergyRepository.listByPatientLocal(patientId),
-          medicationRepository.listByPatientLocal(patientId),
-        ]);
-        const sourceLines = [
-          patient.relevantHistory && `Recorded history: ${patient.relevantHistory}`,
-          ...allergies.filter((item) => !item.enteredInErrorAt).map(
-            (item) =>
-              `Recorded allergy: ${item.substance}; reaction: ${item.reaction}; severity: ${item.severity}`,
-          ),
-          ...medications.filter((item) => !item.enteredInErrorAt).map(
-            (item) =>
-              `Recorded medication: ${item.name}; dose: ${item.dose}; frequency: ${item.frequency}`,
-          ),
-          ...observations.filter((item) => !item.enteredInErrorAt).map(
-            (item) => `Recorded observation (${item.recordedAt}): ${item.label} ${item.value} ${item.unit}`,
-          ),
-          ...notes.map((item) => `Clinical note (${item.noteType}): ${item.body}`),
-          ...consultations.map(
-            (item) =>
-              `Consultation (${item.occurredAt}): ${item.reason}; notes: ${item.notes}`,
-          ),
-        ].filter((line): line is string => Boolean(line?.trim()));
+        const { patient, lines: sourceLines } = await loadPatientHistory(patientId);
         const term = historyQuery.trim();
         // Rank before applying the character budget, so the context sent to
         // the model is the most relevant history rather than whichever
@@ -580,22 +593,154 @@ export function AIWorkspacePage() {
         .map((fact) => `${fact.category}: ${fact.value} — source: “${fact.evidence}”`)
         .join("\n"),
     );
+    setSummaryReviewed(false);
     setError("");
   }
 
   async function saveSummary() {
     if (!summary.trim()) return;
     try {
-      const saved = await aiRepository.saveArtifact("summary", {
-        text: summary.trim(),
-        source_id: selectedArtifact?.id ?? null,
-        clinician_edited: true,
-      });
+      const saved =
+        selectedArtifact?.kind === "summary" && !selectedArtifact.payload.applied_at
+          ? await aiRepository.updateLocal(
+              selectedArtifact.id,
+              { ...selectedArtifact.payload, text: summary.trim(), clinician_edited: true },
+              selectedArtifact.status,
+            )
+          : await aiRepository.saveArtifact("summary", {
+              text: summary.trim(),
+              source_id: selectedArtifact?.id ?? null,
+              clinician_edited: true,
+            });
       setSelectedArtifact(saved);
       setMessage("Editable source-linked summary saved encrypted on this device.");
       await reload();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Summary could not be saved.");
+    }
+  }
+
+  async function generateClinicalSummary() {
+    setError("");
+    setMessage("");
+    const newSource = sourceText.trim();
+    if (!newSource) {
+      setError("Add the new visit text first: transcribe audio, run OCR, or type notes into Source text.");
+      return;
+    }
+    if (newSource.length > MAX_NEW_SOURCE_CHARS) {
+      setError(
+        `The new visit text is ${newSource.length.toLocaleString()} characters; the summary accepts up to ${MAX_NEW_SOURCE_CHARS.toLocaleString()}. Shorten it first.`,
+      );
+      return;
+    }
+    setBusy("summary");
+    try {
+      let history: string[] = [];
+      let patientName = "";
+      if (patientId) {
+        const loaded = await loadPatientHistory(patientId);
+        history = selectHistoryForSummary(loaded.lines, newSource);
+        patientName = loaded.patient.fullName;
+      }
+      const result = await localAIClient.summarize(newSource, history, extractionModel, token);
+      const draft = formatSummaryDraft(result);
+      const saved = await aiRepository.saveArtifact(
+        "summary",
+        {
+          text: draft,
+          items: result.items,
+          source_lines: result.source_lines,
+          model_id: result.model_id,
+          dropped: result.dropped,
+          patient_id: patientId || null,
+          generated_by_model: true,
+        },
+        "review_required",
+      );
+      setSelectedArtifact(saved);
+      setSummary(draft);
+      setSummaryReviewed(false);
+      const checks = result.items.filter((item) => item.support === "check").length;
+      setMessage(
+        `Draft summary ready: ${result.items.length} statement(s)${history.length ? `, using ${history.length} history line(s) for ${patientName}` : ""}.${checks ? ` ${checks} marked CHECK: verify them against their source lines.` : ""}${result.dropped ? ` ${result.dropped} statement(s) without a valid source were discarded.` : ""} Edit the draft, confirm your review, then add it to the record.`,
+      );
+      await reload();
+    } catch (reason) {
+      const detail = reason instanceof Error ? reason.message : "The summary could not be generated.";
+      setError(`${detail} The visit text and history stay on this device.`);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function addSummaryToRecord() {
+    setError("");
+    setMessage("");
+    const body = summary.trim();
+    if (!body) {
+      setError("Generate or write a summary first.");
+      return;
+    }
+    if (body.length > 20_000) {
+      setError("A clinical note holds up to 20,000 characters. Shorten the summary first.");
+      return;
+    }
+    if (!patientId) {
+      setError("Select the patient this summary belongs to, in the patient-history section.");
+      return;
+    }
+    if (!summaryReviewed) {
+      setError("Confirm that you have reviewed the summary against its source lines.");
+      return;
+    }
+    if (selectedArtifact?.kind === "summary" && selectedArtifact.payload.applied_at) {
+      setError("This summary is already in the patient record.");
+      return;
+    }
+    setBusy("summary-record");
+    try {
+      const patient = await patientRepository.getLocal(patientId);
+      if (!patient) throw new Error("The selected patient is no longer available locally.");
+      const consultation = await consultationRepository.createLocal({
+        patientId,
+        reason: SUMMARY_REASON,
+      });
+      const note = await clinicalNoteRepository.createLocal({
+        consultationId: consultation.id,
+        patientId,
+        body,
+        noteType: "general",
+      });
+      const applied = {
+        text: body,
+        clinician_edited: true,
+        reviewed_by_clinician: true,
+        applied_at: new Date().toISOString(),
+        applied_patient_id: patientId,
+        applied_records: { consultation_id: consultation.id, note_id: note.id },
+      };
+      const saved =
+        selectedArtifact?.kind === "summary"
+          ? await aiRepository.updateLocal(
+              selectedArtifact.id,
+              { ...selectedArtifact.payload, ...applied },
+              "reviewed",
+            )
+          : await aiRepository.saveArtifact("summary", applied, "reviewed");
+      setSelectedArtifact(saved);
+      setMessage(
+        `Summary added to ${patient.fullName}'s record as a clinical note. It is encrypted on this device and queued for sync.`,
+      );
+      await reload();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? `${reason.message} Check the patient's consultations before retrying.`
+          : "The summary could not be added to the record.",
+      );
+    } finally {
+      setBusy("");
     }
   }
 
@@ -617,8 +762,14 @@ export function AIWorkspacePage() {
       setFacts([]);
       setAcceptedFacts(new Set());
     }
-    if (artifact.kind === "summary" && text) setSummary(text);
+    if (artifact.kind === "summary" && text) {
+      setSummary(text);
+      setSummaryReviewed(false);
+    }
   }
+
+  const summaryApplied =
+    selectedArtifact?.kind === "summary" && Boolean(selectedArtifact.payload.applied_at);
 
   const runtimeNames = status
     ? Object.entries(status.runtimes)
@@ -993,20 +1144,63 @@ export function AIWorkspacePage() {
                 <FileText size={15} /> Build editable source-linked summary
               </button>
             </div>
-            <label className="form-field ai-summary-field">
-              <span>Editable summary draft</span>
-              <textarea
-                onChange={(event) => setSummary(event.target.value)}
-                placeholder="Select reviewed facts to build a draft, then edit it before saving."
-                rows={4}
-                value={summary}
-              />
-            </label>
-            <button className="button button-primary" onClick={() => void saveSummary()} type="button">
-              Save summary locally
-            </button>
           </div>
         )}
+        <div className="ai-review-list ai-summary-panel">
+          <div className="ai-review-heading">
+            <strong>Clinical summary</strong>
+            <span>The source text above is the new visit; the selected patient's ranked local history is added as context.</span>
+          </div>
+          <div className="form-actions">
+            <button
+              className="button button-secondary"
+              disabled={busy !== ""}
+              onClick={() => void generateClinicalSummary()}
+              type="button"
+            >
+              <Sparkles size={15} />{" "}
+              {busy === "summary" ? "Generating summary locally..." : "Generate AI clinical summary"}
+            </button>
+          </div>
+          <label className="form-field ai-summary-field">
+            <span>Editable summary draft</span>
+            <textarea
+              onChange={(event) => setSummary(event.target.value)}
+              placeholder="Generate an AI summary, or build one from reviewed facts, then edit it before saving."
+              rows={8}
+              value={summary}
+            />
+          </label>
+          <label className="ai-fact">
+            <input
+              checked={summaryReviewed}
+              onChange={(event) => setSummaryReviewed(event.target.checked)}
+              type="checkbox"
+            />
+            <span className="ai-fact-copy">
+              <strong>I have reviewed this summary against its source lines</strong>
+              <small>Statements marked CHECK need a look at the original before they go into the record.</small>
+            </span>
+          </label>
+          <div className="form-actions">
+            <button className="button button-secondary" onClick={() => void saveSummary()} type="button">
+              Save summary locally
+            </button>
+            <button
+              className="button button-primary"
+              disabled={busy !== "" || !summaryReviewed || !summary.trim() || summaryApplied}
+              onClick={() => void addSummaryToRecord()}
+              type="button"
+            >
+              <Check size={15} />{" "}
+              {summaryApplied
+                ? "Summary added to record"
+                : busy === "summary-record"
+                  ? "Adding summary..."
+                  : "Add summary to patient record"}
+            </button>
+          </div>
+        </div>
       </section>
 
       <section className="content-card ai-history">

@@ -128,7 +128,15 @@ def test_upload_validation_does_not_require_installed_runtime(
     assert "accepts PNG, JPEG, TIFF, WebP, or PDF" in response.json()["detail"]
 
 
-def test_pdf_ocr_requires_poppler(settings: Settings) -> None:
+def test_pdf_ocr_requires_poppler(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Simulate a machine without Poppler, whatever is installed where the
+    # test runs, so the assertion does not depend on the developer's PATH.
+    monkeypatch.setattr(
+        "ai_engine.app.providers.runtime_paths",
+        lambda _settings: {"pdftoppm": None, "pdfinfo": None, "tesseract": None},
+    )
     client = TestClient(create_app(settings))
     response = client.post(
         "/api/v1/ocr",

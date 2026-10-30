@@ -79,6 +79,7 @@ tested** · **In progress** · **Blocked** · **Not implemented**
 | OCR | **Blocked** | Image and PDF workflows are implemented; Tesseract and Poppler are not installed here, so no inference was executed. Printed text is targeted; handwriting is experimental |
 | Structured extraction | **Blocked** | No local LLM model downloaded |
 | History retrieval ranking | Implemented and tested | Lexical relevance ranking before the context budget; **not** semantic retrieval, no embeddings |
+| Clinical summary (generation) | Implemented, **unverified** (no model run) | New visit + ranked history (allergies and medications always included) → numbered lines; the model must cite them. Uncited statements are discarded; statements whose numbers or words are missing from their sources are marked CHECK. Added to the record as a clinical note only after explicit clinician review. Engine and UI tested with a mocked model |
 | Clinician review enforcement | Implemented and tested | Unsupported evidence leaves an extraction unreviewed |
 | Cloud AI dependency | **None, by design** | No offline workflow requires any cloud service |
 
@@ -155,7 +156,7 @@ recommend treatment. No compliance certification is claimed.
 | Quantized LLM extraction | Implemented, **unverified** (no model) |
 | Language translation | Implemented, **unverified** (no model) |
 | Local search indexing | Implemented and tested |
-| RAG pipeline | Lexical retrieve-then-generate, ranked and tested. **No embeddings or vector store** |
+| RAG pipeline | Lexical retrieval (tested) plus source-cited summary generation (implemented, unverified until a model runs). **No embeddings or vector store** |
 | FastAPI authenticated sync APIs | Implemented and tested |
 | PostgreSQL centralized database | Configured, **never exercised** (SQLite only) |
 | End-to-end encryption | **In progress — steps 1-3 of 5.** Clinic keys wrapped per user; patients dual-written as ciphertext alongside plaintext; patient search moved onto keyed hashes so the server never receives the query. **Plaintext remains authoritative and four server-side readers still read it, so records are not yet unreadable to the operator.** See [E2E_ENCRYPTION_DESIGN.md](./docs/security/E2E_ENCRYPTION_DESIGN.md) |

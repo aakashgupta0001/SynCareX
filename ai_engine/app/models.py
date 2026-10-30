@@ -62,3 +62,36 @@ class ExtractionResult(BaseModel):
     facts: list[ExtractedFact]
     model_id: str
     requires_review: bool = True
+
+
+class SummaryRequest(BaseModel):
+    model_id: str = Field(min_length=1, max_length=64)
+    # The new visit: a transcript, OCR text or clinician-typed notes.
+    new_source: str = Field(min_length=1, max_length=6_000)
+    # Retrieved lines from the patient's existing local record.
+    history: list[str] = Field(default_factory=list, max_length=60)
+
+
+class SourceLine(BaseModel):
+    id: str
+    text: str
+
+
+class SummaryItem(BaseModel):
+    section: str = Field(
+        pattern="^(presenting_complaint|relevant_history|medications|allergies|vitals)$"
+    )
+    text: str = Field(min_length=1, max_length=400)
+    sources: list[str] = Field(min_length=1, max_length=12)
+    # "ok": the wording and every number trace to the cited lines.
+    # "check": they do not, so the clinician must verify against the source.
+    support: str = Field(pattern="^(ok|check)$")
+
+
+class SummaryResult(BaseModel):
+    items: list[SummaryItem]
+    source_lines: list[SourceLine]
+    model_id: str
+    # Statements the model returned without a valid line citation; never shown.
+    dropped: int = 0
+    requires_review: bool = True
