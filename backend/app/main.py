@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+import os
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import audit, auth, clinical, continuity, documents, keys, patients, portal, sync
@@ -42,3 +44,13 @@ app.include_router(portal.account_router, prefix="/api/v1")
 @app.get("/health", tags=["health"])
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# Single-service deployments: when SYNCAREX_SERVE_FRONTEND_DIR points at a
+# built PWA (frontend/dist), the API serves it same-origin. Mounted after
+# every API router, so /api and /health always win over the file system.
+_frontend_dir = os.environ.get("SYNCAREX_SERVE_FRONTEND_DIR", "")
+if _frontend_dir and Path(_frontend_dir).is_dir():
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")

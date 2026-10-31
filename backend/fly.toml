@@ -1,0 +1,29 @@
+# Fly.io configuration for the SynCareX API container.
+app = "syncarex-api-1de1"
+primary_region = "sin"
+
+[build]
+  # Full-stack image (API + built PWA same-origin). The build context is the
+  # repository root (pass `fly deploy .`); this path is relative to this
+  # file's directory.
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8000"
+  SYNCAREX_SERVE_FRONTEND_DIR = "/app/frontend-dist"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

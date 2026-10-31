@@ -20,16 +20,18 @@ const apiProxy = {
 };
 
 export default defineConfig(({ mode }) => ({
-  // `npm run dev:https` and `npm run preview:https` serve with a
-  // self-signed certificate so phones and tablets on the LAN get a secure
-  // context — without it the browser disables crypto.subtle and the vault
-  // cannot unlock at all. Devices must use preview:https for offline
-  // installs: the service worker precache only exists in a build.
-  https: mode === "https",
-  // Public tunnels and LAN IPs present unknown Host headers; Vite's
-  // DNS-rebinding protection would block them without this.
-  server: { proxy: apiProxy, allowedHosts: true },
-  preview: { proxy: apiProxy, https: mode === "https", allowedHosts: true },
+  // `npm run dev:https` serves with a self-signed certificate so browsers
+  // get a secure context — without it crypto.subtle is disabled and the
+  // vault cannot unlock. Deployed devices get HTTPS from the platform, and
+  // public tunnels / LAN IPs are allowed through Vite's host protection.
+  server: {
+    proxy: apiProxy,
+    allowedHosts: true,
+    // An empty https object enables TLS; the basic-ssl plugin fills in the
+    // generated self-signed certificate.
+    ...(mode === "https" ? { https: {} } : {}),
+  },
+  preview: { proxy: apiProxy, allowedHosts: true },
   plugins: [
     ...(mode === "https" ? [basicSsl()] : []),
     react(),

@@ -1,6 +1,13 @@
-# SynCareX API server. Runs migrations on every start, then serves the API.
-# The container reads its configuration from environment variables supplied
-# by docker-compose (which reads the repository-root .env file).
+# SynCareX full stack: FastAPI API + built PWA served same-origin by the API
+# itself (SYNCAREX_SERVE_FRONTEND_DIR). One container, one URL, no reverse
+# proxy hop. Build context must be the repository root.
+FROM node:24-alpine AS frontend
+WORKDIR /web
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ .
+RUN npm run build
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,12 +15,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements.txt ./
+COPY backend/requirements.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
-COPY alembic.ini ./
-COPY migrations ./migrations
-COPY app ./app
+COPY backend/alembic.ini ./
+COPY backend/migrations ./migrations
+COPY backend/app ./app
+COPY --from=frontend /web/dist /app/frontend-dist
 
 # Uploaded clinical documents live on a mounted volume, never in the image.
 RUN adduser --disabled-password --gecos "" syncarex \
@@ -23,9 +31,9 @@ USER syncarex
 
 EXPOSE 8000
 
+ENV SYNCAREX_SERVE_FRONTEND_DIR=/app/frontend-dist
+
 # Migrations run before the server binds, so a fresh database is always at
 # the schema the running code expects. Keep this single-instance: two
 # containers racing `alembic upgrade` can deadlock on the same lock.
-# Render (and most hosts) set PORT for Docker services; default to 8000 for
-# plain docker-compose runs.
 CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

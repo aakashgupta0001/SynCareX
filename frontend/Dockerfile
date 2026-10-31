@@ -15,6 +15,10 @@ RUN npm run build
 
 FROM nginx:1.27-alpine
 
+# Default DNS resolver for the upstream lookup: Docker's embedded DNS.
+# Fly.io uses its internal resolver instead - set DNS_RESOLVER="[fdaa::3]".
+ENV DNS_RESOLVER=127.0.0.11
+
 COPY deploy/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
 

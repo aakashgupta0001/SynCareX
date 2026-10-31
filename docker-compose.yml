@@ -17,7 +17,9 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:
@@ -38,16 +40,6 @@ services:
       - documents-data:/var/syncarex/documents
     # Migrations run inside the container command before the server binds.
 
-  frontend:
-    build: ./frontend
-    restart: unless-stopped
-    depends_on:
-      - backend
-    environment:
-      BACKEND_ORIGIN: http://backend:8000
-    ports:
-      - "${FRONTEND_PORT:-80}:80"
-
   # One-shot administrator seeding for a fresh database. Run with:
   #   docker compose --profile seed run --rm backend-seed
   # Production startup refuses SEED_ADMIN_PASSWORD, so this runs with
@@ -55,7 +47,9 @@ services:
   # after the first sign-in, and remove it from .env afterwards.
   backend-seed:
     profiles: ["seed"]
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     depends_on:
       postgres:
         condition: service_healthy

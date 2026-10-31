@@ -56,6 +56,22 @@ class Settings(BaseSettings):
     # server's own feed and is paged by cursor.
     sync_pull_limit: int = Field(default=200, ge=1, le=1000)
 
+    @field_validator("database_url")
+    @classmethod
+    def normalize_database_url(cls, url: str) -> str:
+        """
+        Accepts the URL shape managed hosts hand out.
+
+        `fly postgres attach` sets DATABASE_URL to a `postgres://` URL, a
+        scheme SQLAlchemy 2 removed: it fails at startup with
+        "Can't load plugin: sqlalchemy.dialects:postgres". Rewriting it to
+        `postgresql://` is the documented equivalent, and SQLAlchemy then
+        selects psycopg 3, which is what this project installs.
+        """
+        if url.startswith("postgres://"):
+            return "postgresql://" + url[len("postgres://") :]
+        return url
+
     @field_validator("frontend_origins")
     @classmethod
     def reject_wildcard_origins(cls, origins: list[str]) -> list[str]:
