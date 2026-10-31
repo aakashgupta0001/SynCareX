@@ -26,8 +26,10 @@ export default defineConfig(({ mode }) => ({
   // cannot unlock at all. Devices must use preview:https for offline
   // installs: the service worker precache only exists in a build.
   https: mode === "https",
-  server: { proxy: apiProxy },
-  preview: { proxy: apiProxy, https: mode === "https" },
+  // Public tunnels and LAN IPs present unknown Host headers; Vite's
+  // DNS-rebinding protection would block them without this.
+  server: { proxy: apiProxy, allowedHosts: true },
+  preview: { proxy: apiProxy, https: mode === "https", allowedHosts: true },
   plugins: [
     ...(mode === "https" ? [basicSsl()] : []),
     react(),
