@@ -29,3 +29,4 @@ frontend/test-results/
 frontend/playwright-report/
 frontend/dist/
 .render_deploy_state.json
+.new_admin_credentials.txt
