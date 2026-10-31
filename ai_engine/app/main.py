@@ -4,7 +4,7 @@ import logging
 import shutil
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
@@ -46,6 +46,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+
+    # Chrome's Private Network Access: when a browser page on a public/secure
+    # origin (for example the deployed https:// app) calls this loopback
+    # engine, Chrome preflights with Access-Control-Request-Private-Network
+    # and blocks the request unless the preflight succeeds AND the response
+    # carries Access-Control-Allow-Private-Network. CORSMiddleware would
+    # reject that unknown requested header with a 400, so the PNA preflight
+    # is answered here directly, before the CORS layer.
+    @app.middleware("http")
+    async def private_network_access(request: Request, call_next):
+        request_headers = {key.lower(): value for key, value in request.headers.items()}
+        if (
+            request.method == "OPTIONS"
+            and "origin" in request_headers
+            and "access-control-request-private-network" in request_headers
+        ):
+            origin = request_headers.get("origin", "*")
+            requested = request_headers.get(
+                "access-control-request-headers",
+                request_headers.get("access-control-request-method", ""),
+            )
+            return JSONResponse(
+                status_code=200,
+                content={},
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                    "Access-Control-Allow-Headers": requested or "Authorization, Content-Type",
+                    "Access-Control-Allow-Private-Network": "true",
+                    "Access-Control-Max-Age": "86400",
+                },
+            )
+        response = await call_next(request)
+        response.headers["Access-Control-Allow-Private-Network"] = "true"
+        return response
 
     def require_token(
         authorization: Annotated[str | None, Header()] = None,
