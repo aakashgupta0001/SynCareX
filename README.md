@@ -1,8 +1,52 @@
-# SynCareX
+# SynCareX — offline-first clinical documentation with on-device AI
 
-Accurate Records. Intelligent Care. Connected Everywhere.
+**SynCareX turns voice notes and scanned paper reports into structured, clinician-reviewable case files — with no internet required.** Built for rural clinics: an offline-first PWA keeps records on the device (AES-GCM encrypted), a durable sync queue reconciles everything safely when connectivity returns, and an optional on-device AI engine (whisper.cpp speech-to-text, Tesseract OCR, a quantized Qwen LLM) converts speech and paper into structured facts that a clinician reviews before anything enters the record.
 
-SynCareX is a development foundation for offline-first clinical documentation. It stores and organizes clinician-authored information; it does not diagnose, prescribe, or recommend treatment. Use synthetic data only. This is not a production or clinically validated system.
+> **AI output is unverified documentation assistance, not diagnosis or treatment advice.** A qualified clinician must review everything. Use synthetic data only — this is not a clinically validated system.
+
+| PS04 requirement | Where it lives |
+|---|---|
+| Offline-first PWA (Service Worker + IndexedDB) | `frontend/` — Vite PWA, encrypted Dexie v5 stores, AES-GCM at rest |
+| Voice-based clinical note capture → transcription | AI Workspace → whisper.cpp (`whisper-tiny`/`base`), measured WER below |
+| Medical document scanning → OCR | AI Workspace → Tesseract 5, printed-text CER measured below; PDFs via Poppler (10 pages max) |
+| AI-assisted structured case files (clinician-reviewed) | AI extraction (quantized Qwen 2.5 0.5B, JSON-grammar constrained, verbatim-evidence validated) → reviewed facts build the case file |
+| RAG over patient history | Lexical ranking (TF-IDF-style) + cited-source-line summaries (RAG-lite; no embeddings) |
+| Durable sync engine (idempotency, retries, conflicts) | `backend/app/services/sync.py` + `frontend/src/services/syncEngine.ts` — idempotency keys, version checks, conflicts preserved for clinician review |
+| Central PostgreSQL + audit logs | PostgreSQL 17 (CI-verified), tamper-evident SHA-256 hash-chained audit log with `/audit/verify` |
+| Security: encryption at rest, Argon2id, JWT + HttpOnly refresh cookie, clinic scoping | `backend/app/security/`, per-device vault keys, clinic-scoped queries throughout |
+| FHIR-style interoperability | `/api/v1/fhir/patients/{id}`, `/fhir/referrals/{id}`, `/fhir/validate` |
+| Emergency access without login | Emergency Passports: signed, expiring, revocable tokens + QR (`/passports`) |
+
+**Measured on this machine (5 synthetic English dictations, 1 printed document — small set, honest numbers; see `ai_engine/evals/`):**
+
+| Measure | Result |
+|---|---|
+| Speech-to-text WER — whisper-tiny | 44.2% (5 clips, ~1.4 s per 5 s clip) |
+| Speech-to-text WER — whisper-base | 22.7% (5 clips, ~2.7 s per clip) |
+| OCR CER — printed English lab report | 0.0% (0.4 s) |
+| Fact extraction (0.5B model, 2 sources) | facts captured but formatted as sentences — strict field match 0%, clinician review mandatory |
+| Model sizes | whisper-tiny 74 MiB · whisper-base 141 MiB · Qwen 0.5B Q4 379 MiB |
+
+CI: PostgreSQL 17 workflow runs the full backend suite on every push — **currently green** (includes a two-thread same-record concurrency test).
+
+## Quickstart (3 steps)
+
+```bash
+# 1. Backend + database
+cd backend && python -m pip install -r requirements.txt && python -m alembic upgrade head
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# 2. Frontend
+cd ../frontend && npm ci && npm run dev
+
+# 3. Open http://localhost:5173, sign in (seeded admin: admin@syncarex.example.com —
+#    set SEED_ADMIN_PASSWORD first, see .env.example), open AI Workspace, paste the
+#    engine token, and transcribe a voice note.
+```
+
+Full stack in containers: `docker compose build && docker compose up -d` — see the [deployment guide](./docs/DEPLOYMENT_GUIDE.md).
+
+> **Security note:** an earlier commit briefly contained development credentials. All of them have been rotated or deleted (JWT secret, database passwords, admin passwords) and the file removed from the repository tip. History rewrite was declined deliberately; nothing in the current tip is valid for any running deployment.
 
 ## Implemented foundation
 
